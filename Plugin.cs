@@ -99,7 +99,7 @@ public class AMF3Object
     }
 }
 
-public class AMFData
+public class AMFDataParser
 {
     private int Offset;
     private byte[] Data;
@@ -110,7 +110,7 @@ public class AMFData
     TypeAndData AnalyzedData;
     TreeControl OneTreeControl;
 
-    public AMFData()
+    public AMFDataParser()
     {
         DebugLevel = 0;
         Level = 0;
@@ -164,9 +164,11 @@ public class AMFData
     {
         OneTreeControl=ParamOneTreeControl;
         OneTreeControl.treeView.Nodes.Clear();
+
         TreeNode RootNode=OneTreeControl.treeView.Nodes.Add("Root");
         DumpData(AnalyzedData, 0, RootNode);
         OneTreeControl.treeView.ExpandAll();
+        OneTreeControl.treeView.SelectedNode = RootNode;
     }
 
     void DumpData(Object AObject, int Level, TreeNode ParentNode)
@@ -847,12 +849,12 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
     private TreeControl oAMFTree;
     private TXTEditor oAMFEditor;
     bool IsAMFContent;
-    AMFData m_AMFData;
+    AMFDataParser m_AMFData;
 
     public AMFRequestInspector()
     {
         IsAMFContent = false;
-        m_AMFData = new AMFData();
+        m_AMFData = new AMFDataParser();
     }
 
     public bool bReadOnly
@@ -884,7 +886,7 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
     {
         IsAMFContent = false;
         m_bDirty = false;
-        oAMFEditor.Data = "";
+        oAMFEditor.Data = null;
     }
 
     public override void AddToTab(TabPage tabPage)
@@ -955,11 +957,11 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
     private TreeControl oAMFTree;
     private TXTEditor oAMFEditor;
     bool IsAMFContent;
-    AMFData m_AMFData;
+    AMFDataParser m_AMFData;
 
     public AMFResponseInspector()
     {
-        m_AMFData = new AMFData();
+        m_AMFData = new AMFDataParser();
         IsAMFContent = false;
     }
 
@@ -991,7 +993,7 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
     {
         IsAMFContent = false;
         m_bDirty = false;
-        oAMFEditor.Data = "";
+        oAMFEditor.Data = null;
     }
     public override void AddToTab(TabPage tabPage)
     {
