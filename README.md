@@ -6,6 +6,8 @@ This project is to provide AMF binary POST data parser functionality to Fiddler2
 
 Currently it's only providing parsing functionality and it provides experimental way to modify the existing contents inside AMF binary data.
 
+Old repository is left for reference purpose only: https://amfparser.codeplex.com/
+
 ## System Requirements
 ### FOR USE
 
