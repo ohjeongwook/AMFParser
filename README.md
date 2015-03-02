@@ -6,6 +6,14 @@ This project is to provide AMF binary POST data parser functionality to Fiddler2
 
 Currently it's only providing parsing functionality but in the future we will provide way to modify the existing contents inside AMF binary data.
 
+## System Requirements
+### FOR USE
+
+  * Fiddler2
+  * .Net Framework 2 or greater
+### FOR DEVELOPMENT
+Visual Studio 2003 or greater
+
 ## How to Install
 
 Copy AMFParser.dll to Inspectors directory under Fiddler2 installation directory(usually %ProgramFiles%\Fiddler2\Inspectors).
