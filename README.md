@@ -11,6 +11,7 @@ Currently it's only providing parsing functionality but in the future we will pr
 
   * Fiddler2
   * .Net Framework 2 or greater
+
 ### FOR DEVELOPMENT
 Visual Studio 2003 or greater
 
