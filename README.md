@@ -4,7 +4,7 @@ AMFParser plugin for Fiddler2 web debugger. It can be used for parsing and displ
 
 This project is to provide AMF binary POST data parser functionality to Fiddler2. It works as Fiddler2 addon and shows it's own tab inside Fiddler2 inspector tab. This addon can be very helpful when you need to parse and display what's inside AMF data.
 
-Currently it's only providing parsing functionality and it provides experimental way to modify the existing contents inside AMF binary data.
+Currently it provides parsing functionality and experimental editing functionality.
 
 Old repository is left for reference purpose only: https://amfparser.codeplex.com/
 
