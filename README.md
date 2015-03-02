@@ -23,9 +23,9 @@ Copy AMFParser.dll to Inspectors directory under Fiddler2 installation directory
 
 ## How to use
 
-Launch Fiddler2
-The AMF tab will appear as one of Fiddler2 inspector tabs.
-The AMF tab will show data whenever it encounters AMF encoded POST data.
+* Launch Fiddler2
+* The AMF tab will appear as one of Fiddler2 inspector tabs.
+* The AMF tab will show data whenever it encounters AMF encoded POST data.
 
 ## New BSD License (BSD)
 Copyright (c) 2009, Jeongwook Oh
