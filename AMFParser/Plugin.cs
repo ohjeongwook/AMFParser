@@ -82,9 +82,8 @@ public class AMFDataParser
 
     ArrayList ClassDefinitions;
 
-    ArrayList ParsedArray;
+    public ArrayList ParsedArray;
 
-    TreeControl OneTreeControl;
     ArrayList StringRefs;
 
     public AMFDataParser()
@@ -111,7 +110,7 @@ public class AMFDataParser
     {
         TypeAndData NewTypeAndData = new TypeAndData();
         NewTypeAndData.Name = Name;
-        NewTypeAndData.TypeStr = NewObject.GetType().Name;
+        NewTypeAndData.TypeStr = null;
         NewTypeAndData.Data = NewObject;
         Array.Add( NewTypeAndData );
     }
@@ -173,18 +172,14 @@ public class AMFDataParser
 
             AddTypeAndData(ParsedArray, "Message", MessageArray);
 
-            EnumerateNodes(ParsedArray);
             return true;
         }
 
         return false;
     }
 
-    public void DrawOnTreeControl(TreeControl ParamOneTreeControl)
+    public void DrawOnTreeControl(TreeControl OneTreeControl)
     {
-        OneTreeControl=ParamOneTreeControl;
-        OneTreeControl.treeView.Nodes.Clear();
-
         TreeNode RootNode=OneTreeControl.treeView.Nodes.Add("Root");
 
         EnumerateNodes( ParsedArray, RootNode );
@@ -195,9 +190,11 @@ public class AMFDataParser
     }
 
 
-    void EnumerateNodes( Object TargetObject, TreeNode ParentNode = null, int Level = 0, string TypeStr = "" )
+    public string EnumerateNodes( Object TargetObject, TreeNode ParentNode = null, int Level = 0, string TypeStr = "" )
     {
         TreeNode CurrentNode = null;
+
+        string enumerate_str = "";
 
         try
         {
@@ -205,14 +202,14 @@ public class AMFDataParser
             string DataType = TargetObject.GetType().Name ;
 
             if(_DebugLevel > 0)
-                AddDebugMessage(Prefix + "Type: " + DataType + "\r\n");
+                enumerate_str += Prefix + "Type: " + DataType + "\r\n";
 
             if (DataType == "TypeAndData")
             {
                 TypeAndData TypeAndDataEntry = (TypeAndData)TargetObject;
 
                 if (_DebugLevel > 0)
-                    AddDebugMessage( Prefix + "SubType: " + TypeAndDataEntry.Type + "\r\n" );
+                    enumerate_str += Prefix + "SubType: " + TypeAndDataEntry.Type + "\r\n";
 
                 if (TypeAndDataEntry.Data != null)
                 {
@@ -221,14 +218,14 @@ public class AMFDataParser
                     {
                         CurrentNode = ParentNode.Nodes.Add( "[" + TypeAndDataEntry.Name + "]" );
                     }
-                    EnumerateNodes(TypeAndDataEntry.Data, CurrentNode, Level + 1, TypeAndDataEntry.TypeStr == null ? "" : TypeAndDataEntry.TypeStr );
+                    enumerate_str += EnumerateNodes(TypeAndDataEntry.Data, CurrentNode, Level + 1, TypeAndDataEntry.TypeStr == null ? "" : TypeAndDataEntry.TypeStr);
                 }
             }
             else if (DataType == "ArrayList")
             {
                 foreach (Object sub_entry in (System.Collections.ArrayList) TargetObject)
                 {
-                    EnumerateNodes(sub_entry, ParentNode, Level + 1);
+                    enumerate_str += EnumerateNodes(sub_entry, ParentNode, Level + 1);
                 }
             }
             else if (DataType == "Dictionary`2")
@@ -236,20 +233,20 @@ public class AMFDataParser
                 Dictionary<string, Object> ADic = (Dictionary<string, Object>)TargetObject;
                 foreach(KeyValuePair<string,Object> entry in ADic)
                 {
-                    AddDebugMessage( Prefix+entry.Key+": \r\n" );
+                    enumerate_str += Prefix+entry.Key+": \r\n";
 
                     if (ParentNode != null)
                     {
                         CurrentNode = ParentNode.Nodes.Add(entry.Key);
                     }
 
-                    EnumerateNodes(entry.Value, CurrentNode, Level + 1);
+                    enumerate_str += EnumerateNodes(entry.Value, CurrentNode, Level + 1);
                 }
             }
             else if (DataType == "Int32")
             {
                 Int32 Value=(Int32)TargetObject;
-                AddDebugMessage( Prefix + Value + "\r\n" );
+                enumerate_str += Prefix + Value + "\r\n";
 
                 if (ParentNode != null)
                     CurrentNode = ParentNode.Nodes.Add(Value.ToString() + "("+TypeStr+")" );
@@ -257,7 +254,7 @@ public class AMFDataParser
             else if (DataType == "UInt32")
             {
                 UInt32 Value = (UInt32)TargetObject;
-                AddDebugMessage( Prefix + Value + "\r\n" );
+                enumerate_str += Prefix + Value + "\r\n";
 
                 if (ParentNode != null)
                     CurrentNode = ParentNode.Nodes.Add(Value.ToString() + " (" + TypeStr + ")" );
@@ -265,7 +262,7 @@ public class AMFDataParser
             else if (DataType == "Double")
             {
                 Double Value = (Double)TargetObject;
-                AddDebugMessage( Prefix + Value + "\r\n" );
+                enumerate_str += Prefix + Value + "\r\n";
 
                 if (ParentNode != null)
                     CurrentNode = ParentNode.Nodes.Add(Value.ToString() + " (" + TypeStr + ")" );
@@ -273,7 +270,7 @@ public class AMFDataParser
             else if (DataType == "DateTime")
             {
                 DateTime Value = (DateTime)TargetObject;
-                AddDebugMessage( Prefix + Value + "\r\n" );
+                enumerate_str += Prefix + Value + "\r\n";
 
                 if (ParentNode != null)
                     CurrentNode = ParentNode.Nodes.Add(Value.ToString() + " (" + TypeStr + ")" );
@@ -282,7 +279,7 @@ public class AMFDataParser
             {
                 String Value = (String)TargetObject;
                 if(Value.Length>0)
-                    AddDebugMessage( Prefix + Value + "\r\n" );
+                    enumerate_str += Prefix + Value + "\r\n";
 
                 if (ParentNode != null)
                     CurrentNode = ParentNode.Nodes.Add(Value + " (" + TypeStr + ")" );
@@ -290,7 +287,7 @@ public class AMFDataParser
             else if (DataType == "AMF3Object")
             {
                 AMF3Object OneAMF3Object = (AMF3Object)TargetObject;
-                AddDebugMessage( Prefix + OneAMF3Object.TypeIdentifier + "\r\n" );
+                enumerate_str += Prefix + OneAMF3Object.TypeIdentifier + "\r\n";
                 
 
                 if (ParentNode != null)
@@ -319,7 +316,7 @@ public class AMFDataParser
                         //CurrentNode = ParentNode.Nodes.Add("");
                         CurrentNode = ParentNode;
                     }
-                    EnumerateNodes(OneAMF3Object.Parameters[i], CurrentNode, Level + 1);
+                    enumerate_str += EnumerateNodes(OneAMF3Object.Parameters[i], CurrentNode, Level + 1);
                 }
 
                 AddDebugMessage(Prefix + "DynamicMembers.Count:" + OneAMF3Object.DynamicMembers.Count + "\r\n");
@@ -327,12 +324,12 @@ public class AMFDataParser
                 int index = 0;
                 foreach (KeyValuePair<string, Object> entry in OneAMF3Object.DynamicMembers)
                 {
-                    AddDebugMessage( Prefix + "[" + index + "]" + entry.Key + "\r\n" );
+                    enumerate_str += Prefix + "[" + index + "]" + entry.Key + "\r\n";
                     
                     if (ParentNode != null)
                         CurrentNode = ParentNode.Nodes.Add(entry.Key);
 
-                    EnumerateNodes( entry.Value, CurrentNode, Level + 1);
+                    enumerate_str += EnumerateNodes(entry.Value, CurrentNode, Level + 1);
                     index++;
                 }
 
@@ -340,7 +337,7 @@ public class AMFDataParser
             }
             else
             {
-                AddDebugMessage( Prefix + TargetObject.GetType().Name + "" );
+                enumerate_str += Prefix + TargetObject.GetType().Name + "";
             }
         }
         catch (Exception e)
@@ -348,6 +345,8 @@ public class AMFDataParser
             AddDebugMessage( "Exception: " + e.StackTrace+"\r\n" );
             AddDebugMessage( TargetObject.ToString()+"\r\n" );
         }
+
+        return enumerate_str;
     }
 
     public void DumpHexRemaining()
@@ -974,7 +973,7 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
     private byte[] _body;
     private bool m_bDirty;
     private bool m_bReadOnly;
-    private TreeControl oAMFTree;
+    private TreeControl AMFTreeControl;
     private TXTEditor oAMFEditor = new TXTEditor();
     bool IsAMFContent;
     AMFDataParser m_AMFData;
@@ -1019,10 +1018,10 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
 
     public override void AddToTab(TabPage tabPage)
     {
-        oAMFTree = new TreeControl();
+        AMFTreeControl = new TreeControl();
         tabPage.Text = "AMF";
-        tabPage.Controls.Add(oAMFTree);
-        oAMFTree.Dock = DockStyle.Fill;
+        tabPage.Controls.Add(AMFTreeControl);
+        AMFTreeControl.Dock = DockStyle.Fill;
 
     }
 
@@ -1050,6 +1049,8 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
         }
         set
         {
+            AMFTreeControl.treeView.Nodes.Clear();
+
             if ((_headers.Exists("Transfer-Encoding") || _headers.Exists("Content-Encoding")))
             {
                 //lblDisplayMyEncodingWarning.Visible = true; 
@@ -1064,7 +1065,7 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
                     m_AMFData.ProcessData(_body);
 
                     //Drawing
-                    m_AMFData.DrawOnTreeControl(oAMFTree);
+                    m_AMFData.DrawOnTreeControl(AMFTreeControl);
                     m_AMFData.DumpHexRemaining();
                     oAMFEditor.Data += m_AMFData.GetDebugStr();
                 }
@@ -1085,7 +1086,7 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
     private byte[] _body;
     private bool m_bDirty;
     private bool m_bReadOnly;
-    private TreeControl oAMFTree;
+    private TreeControl AMFTreeControl;
     private TXTEditor oAMFEditor = new TXTEditor();
     bool IsAMFContent;
     AMFDataParser m_AMFData;
@@ -1128,10 +1129,11 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
     }
     public override void AddToTab(TabPage tabPage)
     {
-        oAMFTree = new TreeControl();
+        AMFTreeControl = new TreeControl();
+
         tabPage.Text = "AMF";
-        tabPage.Controls.Add(oAMFTree);
-        oAMFTree.Dock = DockStyle.Fill;
+        tabPage.Controls.Add(AMFTreeControl);
+        AMFTreeControl.Dock = DockStyle.Fill;
     }
 
     public HTTPResponseHeaders headers
@@ -1159,6 +1161,7 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
         }
         set
         {
+            AMFTreeControl.treeView.Nodes.Clear();
 
             if ((_headers.Exists("Transfer-Encoding") || _headers.Exists("Content-Encoding")))
             {
@@ -1187,9 +1190,9 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
                     m_AMFData.ProcessData(_body);
 
                     //Drawing
-                    //oAMFTree.treeView.BeginUpdate();
-                    m_AMFData.DrawOnTreeControl(oAMFTree);
-                    //oAMFTree.treeView.EndUpdate();
+                    //AMFTreeControl.treeView.BeginUpdate();
+                    m_AMFData.DrawOnTreeControl(AMFTreeControl);
+                    //AMFTreeControl.treeView.EndUpdate();
                     //m_AMFData.DumpHexRemaining();
                     //oAMFEditor.Data += m_AMFData.GetDebugStr();
                 }

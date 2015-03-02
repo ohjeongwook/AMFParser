@@ -1,6 +1,8 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Diagnostics;
+using System.Collections;
+using System.Collections.Generic;
 
 namespace TestAMFDataParser
 {
@@ -123,8 +125,14 @@ namespace TestAMFDataParser
                 0x5f,0x6d,0x65,0x73,0x73,0x61,0x67,0x65
             };
             bool ret = target.ProcessData(pmData);
+            Debug.WriteLine("Hello!!!\r\n");
+
 
             Assert.IsTrue(ret);
+
+            string parsed_array_str = target.EnumerateNodes( target.ParsedArray );
+
+            Debug.WriteLine( parsed_array_str );
         }
 
 
