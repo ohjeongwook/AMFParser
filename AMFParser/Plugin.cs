@@ -1,4 +1,6 @@
-﻿using System;
+﻿#undef DEBUG_MESSAGE_GENERATION
+
+using System;
 using System.Windows.Forms;
 using System.IO;
 using System.Text;
@@ -9,6 +11,13 @@ using Fiddler;
 using Viewers;
 
 [assembly: Fiddler.RequiredVersion("2.2.2.0")]
+
+
+struct NodeData
+{
+    public int Sequence;
+    public object Child;
+};
 
 public class ClassDefinition
 {
@@ -29,12 +38,21 @@ public class ClassDefinition
         IsExternalizable = pIsExternalizable;
         IsDynamic = pIsDynamic;
     }
-
 }
 
-public struct TypeAndData
+public class MetaObject
 {
+    static int CurrentSeq = 0;
+    public MetaObject()
+    {
+        Seq = CurrentSeq;
+        CurrentSeq++;
+    }
+
+    public int Seq;
     public int Type;
+    public int Offset;
+
     public string Name;
     public string TypeStr;
     public Object Data;
@@ -42,32 +60,110 @@ public struct TypeAndData
 
 public class AMF3Object
 {
-    public string TypeIdentifier ;
-    public uint IsExternalizable ;
-    public uint IsDynamic ;
+    public string TypeIdentifier;
+    public uint IsExternalizable;
+    public uint IsDynamic;
     public uint ClassMemberCount;
     public uint IsInLine;
     public uint IsInLineClassDef;
     public ArrayList ClassMemberDefinitions;
     public ArrayList Parameters;
-    public Dictionary<string, Object> DynamicMembers;
+    public Dictionary<string, object> DynamicMembers;
 
     public AMF3Object()
     {
         ClassMemberDefinitions = new ArrayList();
-        Parameters=new ArrayList();
-        DynamicMembers=new Dictionary<string, Object>();
+        Parameters = new ArrayList();
+        DynamicMembers = new Dictionary<string, object>();
     }
 }
+
+enum AMFDataTypes
+{
+    Number = 0,
+    Boolean,
+    String,
+    Object,
+    MovieClip,
+    Null,
+    Undefined,
+    Reference,
+    EcmaArray,
+    ObjectEnd,
+    StrictArray, //0xA
+    Date,
+    LongUTF,
+    Unsupported,
+    RecordSet,
+    XMLDocument,
+    TypedObject, //0x10
+    AMF3         //0x11
+};
 
 public class AMFDataParser
 {
     private int Offset;
-    private byte[] Data;
-    string DebugStr ;
+
+    private List<byte> Data = null;
+
+    public int GetCurrentOffset()
+    {
+        return Offset;
+    }
+
+    public string GetDebugStr()
+    {
+        return DebugStr;
+    }
+
+    public byte[] DataBytes
+    {
+        get
+        {
+            byte[] bytes = new byte[Data.Count];
+            for (int i = 0; i < Data.Count; i++)
+            {
+                bytes[i] = Data[i];
+            }
+
+            return bytes;
+        }
+
+        set
+        {
+            if (Data != null)
+            {
+                Data = null;
+            }
+
+            Data = new List<byte>();
+            for (int i = 0; i < value.Length; i++)
+            {
+                Data.Add(value[i]);
+            }
+            Offset = 0;
+
+            NewClassDefinitions.Clear();
+            NewStringRefs.Clear();
+        }
+    }
+
+    void AdjustOffset(int NewOffset = -1)
+    {
+        if (NewOffset == -1)
+        {
+            Offset = Data.Count;
+        }
+        else
+        {
+            Offset = NewOffset;
+        }
+    }
+
+    string DebugStr;
     int Level;
 
-    int _DebugLevel = 0;
+    int _DebugLevel = 100;
     public int DebugLevel
     {
         get
@@ -80,18 +176,38 @@ public class AMFDataParser
         }
     }
 
-    ArrayList ClassDefinitions;
+    string Prefix;
+    void Enter()
+    {
+        Level++;
+        Prefix = new string(' ', Level);
+    }
+
+    void Exit()
+    {
+        Level--;
+        Prefix = new string(' ', Level);
+    }
 
     public ArrayList ParsedArray;
 
-    ArrayList StringRefs;
+    ArrayList ClassDefinitions;
+    ArrayList NewClassDefinitions;
+
+    ArrayList StringRefs = null;
+    ArrayList NewStringRefs = null;
 
     public AMFDataParser()
     {
-        _DebugLevel = 0;
         Level = 0;
         Offset = 0;
         DebugStr = "";
+
+        ParsedArray = new ArrayList();
+        ClassDefinitions = new ArrayList();
+        NewClassDefinitions = new ArrayList();
+        StringRefs = new ArrayList();
+        NewStringRefs = new ArrayList();
     }
 
     public void AddDebugMessage(string format, params Object[] args)
@@ -106,268 +222,486 @@ public class AMFDataParser
         return DebugStr;
     }
 
-    private void AddTypeAndData( ArrayList Array, string Name, Object NewObject )
+    private void AddMetaObject(ArrayList Array, string Name, Object NewObject)
     {
-        TypeAndData NewTypeAndData = new TypeAndData();
-        NewTypeAndData.Name = Name;
-        NewTypeAndData.TypeStr = null;
-        NewTypeAndData.Data = NewObject;
-        Array.Add( NewTypeAndData );
+        MetaObject NewMetaObject = new MetaObject();
+        NewMetaObject.Name = Name;
+        NewMetaObject.TypeStr = null;
+        NewMetaObject.Data = NewObject;
+        NewMetaObject.Offset = Offset;
+        Array.Add(NewMetaObject);
     }
 
-    public bool ProcessData(byte[] pmData)
+    object GetMetaObjectData(object Element)
     {
-        Level = 0;
-        Data = pmData;
-        Offset = 0;
-        DebugStr = "";
+        return ((MetaObject)Element).Data;
+    }
 
-        ClassDefinitions = new ArrayList();
-        StringRefs = new ArrayList();
+    public void WriteAMFPacket()
+    {
+        byte[] pmNullData = {};
+        DataBytes = pmNullData;
 
-        int Version = ReadU16();
-        int HeaderCount = ReadU16();
+        WriteAMFHeader();
+        WriteAMFMessage();
+    }
 
-        ParsedArray = new ArrayList();
+    public int Version;
+    public int HeaderCount;
 
-        if (Version == 0x3 || Version == 0x00)
+    public bool ReadAMFHeader()
+    {
+        Version = ReadU16();
+        HeaderCount = ReadU16();
+
+        if (Version == 0x3 || Version == 0x00) //We support AMF0 or AMF3
         {
-            AddDebugMessage("{0}: Version: {1:G}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, Version);
-            AddDebugMessage("{0}: Header Length: {1:G}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, HeaderCount);
-
-            //TODO: Parse Header
-            //AddDebugMessage(System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: \r\n");
-            //DumpHex(Offset, HeaderLength);
+            if (_DebugLevel > 2)
+            {
+                AddDebugMessage("{0}: Version: {1:G}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, Version);
+                AddDebugMessage(" Header Count: {1:G}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, HeaderCount);
+            }
 
             ArrayList HeaderArray = new ArrayList();
             for (int i = 0; i < HeaderCount; i++)
             {
-                AddTypeAndData(HeaderArray, "Name", ReadString());
+                AddMetaObject(HeaderArray, "Header Name", ReadAMF0String());
 
-                Offset += 1;
+                if (_DebugLevel > 2)
+                {
+                    AddDebugMessage(" Skipping: 0x{1:x}\r\n",
+                            System.Reflection.MethodBase.GetCurrentMethod().Name,
+                            Data[Offset]
+                           );
+                }
+
+                AddMetaObject(HeaderArray, "Must Understand", ReadByte());
+
                 int HeaderLength = ReadLong();
 
-                AddTypeAndData(HeaderArray, "Data", ReadData());
+                if (_DebugLevel > 2)
+                {
+                    AddDebugMessage(" HeaderLength: 0x{1:x}@0x{2:x}\r\n",
+                            System.Reflection.MethodBase.GetCurrentMethod().Name,
+                            HeaderLength,
+                            Offset
+                           );
+                }
+                AddMetaObject(HeaderArray, "Data", ReadAMF0());
             }
 
-            AddTypeAndData(ParsedArray, "Header", HeaderArray);
+            AddMetaObject(ParsedArray, "Header", HeaderArray);
 
-            int MessageCount = ReadU16();
-            AddDebugMessage("{0}: MessageCount: {1:G}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, MessageCount);
-
-            ArrayList MessageArray = new ArrayList();
-            for (int i = 0; i < MessageCount; i++)
+            if (_DebugLevel > 2)
             {
-                string Target = ReadString();
-                string Response = ReadString();
-                int Reserved = ReadLong();
-
-                AddTypeAndData(MessageArray, "Target", Target);
-                AddTypeAndData(MessageArray, "Response", Response);
-
-                AddDebugMessage("{0}: Target({1}) Response({2})\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, Target, Response);
-
-                AddTypeAndData(MessageArray, "Data", ReadData());
+                AddDebugMessage(" Header End Offset: 0x{1:x}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, Offset);
             }
-
-            AddTypeAndData(ParsedArray, "Message", MessageArray);
-
             return true;
         }
 
         return false;
     }
 
-    public void DrawOnTreeControl(TreeControl OneTreeControl)
+    public bool WriteAMFHeader()
     {
-        TreeNode RootNode=OneTreeControl.treeView.Nodes.Add("Root");
+        WriteU16(Version);
+        WriteU16(HeaderCount);
 
-        EnumerateNodes( ParsedArray, RootNode );
+        if (Version == 0x3 || Version == 0x00)
+        {
+            ArrayList HeaderArray = (ArrayList)GetMetaObjectData(ParsedArray[0]);
 
-        OneTreeControl.treeView.ExpandAll();
-        OneTreeControl.treeView.SelectedNode = RootNode;
-        OneTreeControl.treeView.Select();
+             int j = 0;
+            for (int i = 0; i < HeaderCount; i++)
+            {
+                WriteAMF0String((string) GetMetaObjectData(HeaderArray[j++]));
+                WriteByte((byte)GetMetaObjectData(HeaderArray[j++]));
+
+                //Reserve 4 bytes
+                int StartOffset = Offset;
+                WriteAMF0((MetaObject) GetMetaObjectData(HeaderArray[j++]));
+                int HeaderLength = Offset - StartOffset;
+
+                AdjustOffset(StartOffset);
+                WriteLong(HeaderLength);
+                AdjustOffset();
+            }
+            return true;
+        }
+
+        return false;
     }
 
+    ArrayList MessageArray;
 
-    public string EnumerateNodes( Object TargetObject, TreeNode ParentNode = null, int Level = 0, string TypeStr = "" )
+    public bool ReadAMFMessage()
     {
-        TreeNode CurrentNode = null;
+        //Message
+        AddDebugMessage("{0}: Message Start @0x{1:x}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, Offset);
+        int MessageCount = ReadU16();
 
-        string enumerate_str = "";
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}: MessageCount: {1:G}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, MessageCount);
 
-        try
+        MessageArray = new ArrayList();
+        for (int i = 0; i < MessageCount; i++)
         {
-            string Prefix = new string(' ', Level);
-            string DataType = TargetObject.GetType().Name ;
+            string Target = ReadAMF0String();
+            string Response = ReadAMF0String();
+            int Reserved = ReadLong();
 
-            if(_DebugLevel > 0)
-                enumerate_str += Prefix + "Type: " + DataType + "\r\n";
+            AddMetaObject(MessageArray, "Target", Target);
+            AddMetaObject(MessageArray, "Response", Response);
+            AddMetaObject(MessageArray, "Message Length", Reserved);
 
-            if (DataType == "TypeAndData")
+            if (_DebugLevel > 2)
             {
-                TypeAndData TypeAndDataEntry = (TypeAndData)TargetObject;
-
-                if (_DebugLevel > 0)
-                    enumerate_str += Prefix + "SubType: " + TypeAndDataEntry.Type + "\r\n";
-
-                if (TypeAndDataEntry.Data != null)
-                {
-                    CurrentNode = ParentNode;
-                    if (TypeAndDataEntry.Name != null)
-                    {
-                        CurrentNode = ParentNode.Nodes.Add( "[" + TypeAndDataEntry.Name + "]" );
-                    }
-                    enumerate_str += EnumerateNodes(TypeAndDataEntry.Data, CurrentNode, Level + 1, TypeAndDataEntry.TypeStr == null ? "" : TypeAndDataEntry.TypeStr);
-                }
+                AddDebugMessage("{0}: Target: {1} Response: {2} Reserved:0x{3:x}\r\n", System.Reflection.MethodBase.GetCurrentMethod().Name, Target, Response, Reserved);
             }
-            else if (DataType == "ArrayList")
+
+            AddMetaObject(MessageArray, "Data", ReadAMF0());
+        }
+
+        AddMetaObject(ParsedArray, "Message", MessageArray);
+
+        return true;
+    }
+
+    public bool WriteAMFMessage()
+    {
+        //Message
+        //ArrayList MessageArray = (ArrayList)GetMetaObjectData(ParsedArray[Message]);
+        WriteU16( MessageArray.Count/4 );
+
+        for (int i = 0; i < MessageArray.Count; i+=4)
+        {
+
+            WriteAMF0String((string)GetMetaObjectData(MessageArray[i]));
+            WriteAMF0String((string)GetMetaObjectData(MessageArray[i+1]));
+
+            //Reserve 4 bytes
+            int StartOffset = Offset;
+            WriteAMF0((MetaObject)GetMetaObjectData(MessageArray[i+3]));
+            int MessageLength = Offset - StartOffset;
+
+            AdjustOffset(StartOffset);
+
+            if ((int)GetMetaObjectData(MessageArray[i + 2]) == -1)
             {
-                foreach (Object sub_entry in (System.Collections.ArrayList) TargetObject)
-                {
-                    enumerate_str += EnumerateNodes(sub_entry, ParentNode, Level + 1);
-                }
-            }
-            else if (DataType == "Dictionary`2")
-            {
-                Dictionary<string, Object> ADic = (Dictionary<string, Object>)TargetObject;
-                foreach(KeyValuePair<string,Object> entry in ADic)
-                {
-                    enumerate_str += Prefix+entry.Key+": \r\n";
-
-                    if (ParentNode != null)
-                    {
-                        CurrentNode = ParentNode.Nodes.Add(entry.Key);
-                    }
-
-                    enumerate_str += EnumerateNodes(entry.Value, CurrentNode, Level + 1);
-                }
-            }
-            else if (DataType == "Int32")
-            {
-                Int32 Value=(Int32)TargetObject;
-                enumerate_str += Prefix + Value + "\r\n";
-
-                if (ParentNode != null)
-                    CurrentNode = ParentNode.Nodes.Add(Value.ToString() + "("+TypeStr+")" );
-            }
-            else if (DataType == "UInt32")
-            {
-                UInt32 Value = (UInt32)TargetObject;
-                enumerate_str += Prefix + Value + "\r\n";
-
-                if (ParentNode != null)
-                    CurrentNode = ParentNode.Nodes.Add(Value.ToString() + " (" + TypeStr + ")" );
-            }
-            else if (DataType == "Double")
-            {
-                Double Value = (Double)TargetObject;
-                enumerate_str += Prefix + Value + "\r\n";
-
-                if (ParentNode != null)
-                    CurrentNode = ParentNode.Nodes.Add(Value.ToString() + " (" + TypeStr + ")" );
-            }
-            else if (DataType == "DateTime")
-            {
-                DateTime Value = (DateTime)TargetObject;
-                enumerate_str += Prefix + Value + "\r\n";
-
-                if (ParentNode != null)
-                    CurrentNode = ParentNode.Nodes.Add(Value.ToString() + " (" + TypeStr + ")" );
-            }
-            else if (DataType == "String")
-            {
-                String Value = (String)TargetObject;
-                if(Value.Length>0)
-                    enumerate_str += Prefix + Value + "\r\n";
-
-                if (ParentNode != null)
-                    CurrentNode = ParentNode.Nodes.Add(Value + " (" + TypeStr + ")" );
-            }
-            else if (DataType == "AMF3Object")
-            {
-                AMF3Object OneAMF3Object = (AMF3Object)TargetObject;
-                enumerate_str += Prefix + OneAMF3Object.TypeIdentifier + "\r\n";
-                
-
-                if (ParentNode != null)
-                {
-                    if (ParentNode.Text == "")
-                    {
-                        ParentNode.Text = OneAMF3Object.TypeIdentifier;
-                    }
-                    else
-                    {
-                        ParentNode.Text = ParentNode.Text + " - " + OneAMF3Object.TypeIdentifier;
-                    }
-                }
-
-                AddDebugMessage(Prefix + "Parameters.Count:" + OneAMF3Object.Parameters.Count + "\r\n");
-
-                for (int i = 0; i < OneAMF3Object.Parameters.Count; i++)
-                {
-                    if (OneAMF3Object.ClassMemberDefinitions.Count > 0)
-                    {
-                        if (ParentNode != null)
-                            CurrentNode = ParentNode.Nodes.Add(OneAMF3Object.ClassMemberDefinitions[i].ToString() + " (" + TypeStr + ")" );
-                    }
-                    else
-                    {
-                        //CurrentNode = ParentNode.Nodes.Add("");
-                        CurrentNode = ParentNode;
-                    }
-                    enumerate_str += EnumerateNodes(OneAMF3Object.Parameters[i], CurrentNode, Level + 1);
-                }
-
-                AddDebugMessage(Prefix + "DynamicMembers.Count:" + OneAMF3Object.DynamicMembers.Count + "\r\n");
-
-                int index = 0;
-                foreach (KeyValuePair<string, Object> entry in OneAMF3Object.DynamicMembers)
-                {
-                    enumerate_str += Prefix + "[" + index + "]" + entry.Key + "\r\n";
-                    
-                    if (ParentNode != null)
-                        CurrentNode = ParentNode.Nodes.Add(entry.Key);
-
-                    enumerate_str += EnumerateNodes(entry.Value, CurrentNode, Level + 1);
-                    index++;
-                }
-
-                AddDebugMessage(Prefix + "DynamicMembers Enumeration Finished!\r\n");
+                WriteLong((int)GetMetaObjectData(MessageArray[i + 2]));
             }
             else
             {
-                enumerate_str += Prefix + TargetObject.GetType().Name + "";
+                WriteLong(MessageLength);
+            }
+            
+            AdjustOffset();
+        }
+        return true;
+    }
+
+    public bool ReadAMFPacket(byte[] pmData)
+    {
+        ParsedArray.Clear();
+        ClassDefinitions.Clear();
+        NewClassDefinitions.Clear();
+        StringRefs.Clear();
+        NewStringRefs.Clear();
+        NodeUpdateMap.Clear();
+
+        Level = 0;
+
+        Data = new List<byte>();
+        for (int i = 0; i < pmData.Length; i++)
+        {
+            Data.Add(pmData[i]);
+        }
+        Offset = 0;
+        DebugStr = "";
+
+        if( ReadAMFHeader() )
+        {
+            if (ReadAMFMessage())
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    TreeView DisplayTreeView;
+
+    public void DrawOnTreeView(TreeView AMFTreeView = null)
+    {
+        if (AMFTreeView != null)
+        {
+            DisplayTreeView = AMFTreeView;
+        }
+
+        if (DisplayTreeView != null)
+        {
+            DisplayTreeView.Nodes.Clear();
+            TreeNode RootNode = DisplayTreeView.Nodes.Add("Root");
+
+            object ChildNewData;
+
+            EnumerateNodes(ParsedArray, out ChildNewData, RootNode);
+
+            DisplayTreeView.ExpandAll();
+            DisplayTreeView.SelectedNode = RootNode;
+            DisplayTreeView.Select();
+        }
+    }
+
+    Dictionary<TreeNode, NodeData> NodeObjectMap = new Dictionary<TreeNode, NodeData>();
+
+    public string GetTreeNodeData(TreeNode Node)
+    {
+        if (NodeObjectMap.ContainsKey(Node))
+        {
+            return NodeObjectMap[Node].Child.ToString();
+        }
+        return null;
+    }
+
+    public bool ReadOnly = true;
+    public bool Dirty = false;
+
+    Dictionary<int, string> NodeUpdateMap = new Dictionary<int, string>();
+    public void SetTreeNodeData(TreeNode Node, string text)
+    {
+        if (NodeObjectMap.ContainsKey(Node))
+        {
+            object LinkedObject =NodeObjectMap[Node].Child;
+
+#if DEBUG_MESSAGE_GENERATION
+            MessageBox.Show(String.Format("Updated: {0} -> {1} Type: {2}",
+                        NodeObjectMap[Node].Child.ToString(),
+                        text,
+                        NodeObjectMap[Node].Child.GetType()
+                       ));
+#endif
+
+            NodeUpdateMap[NodeObjectMap[Node].Sequence] = text;
+
+            object ChildNewData;
+
+            EnumerateNodes( ParsedArray, out ChildNewData );
+
+            Dirty = true;
+
+            DrawOnTreeView();
+        }
+    }
+
+    public int NodeSequence = 0;
+
+    object AddNode(TreeNode ParentNode, out TreeNode NewNode, object child, string TypeStr = "")
+    {
+        if (ParentNode != null)
+        {
+            string text;
+
+            text = child.ToString();
+
+            NewNode = ParentNode.Nodes.Add(text);
+            NodeData CurrentNodeData = new NodeData();
+            CurrentNodeData.Sequence = NodeSequence;
+            CurrentNodeData.Child = child;
+
+            NodeObjectMap.Add(NewNode, CurrentNodeData);
+        }
+        else
+        {
+            NewNode = null;
+            if (NodeUpdateMap.ContainsKey(NodeSequence))
+            {
+                NodeSequence++;
+
+                switch (TypeStr)
+                {
+                    case "Int32":
+                        return Convert.ToInt32(NodeUpdateMap[NodeSequence - 1]);
+                    case "UInt32":
+                        return Convert.ToUInt32(NodeUpdateMap[NodeSequence - 1]);
+                    case "Double":
+                        return Convert.ToDouble(NodeUpdateMap[NodeSequence - 1]);
+                    case "DateTime":
+                        return Convert.ToDateTime(NodeUpdateMap[NodeSequence - 1]);
+                    case "String":
+                        return NodeUpdateMap[NodeSequence - 1];
+                }
+            }
+        }
+
+        NodeSequence++;
+
+        return null;
+    }
+
+    public string EnumerateNodes(
+            object CurrentObject,
+            out object NewData,
+            TreeNode ParentNode = null,
+            int Level = 0,
+            string TypeStr = ""
+        )
+    {
+        if( Level == 0 )
+            NodeSequence = 0;
+
+        Enter();
+
+        NewData = null;
+
+        TreeNode CurrentNode = null;
+        string enumerate_str = "";
+        object ChildNewData = null;
+
+        try
+        {
+            string DataType = CurrentObject.GetType().Name;
+
+            if (DataType == "MetaObject")
+            {
+                MetaObject MetaObjectEntry = (MetaObject)CurrentObject;
+
+                enumerate_str += String.Format("{0} Name:[{1}] {2}({3}) @0x{4:x}\r\n",
+                                Prefix,
+                                MetaObjectEntry.Name,
+                                MetaObjectEntry.Type,
+                                MetaObjectEntry.TypeStr,
+                                MetaObjectEntry.Offset);
+
+
+                if (MetaObjectEntry.Data != null)
+                {
+                    CurrentNode = ParentNode;
+                    if (MetaObjectEntry.Name != null && ParentNode != null)
+                    {
+                        CurrentNode = ParentNode.Nodes.Add("[" + MetaObjectEntry.Name + "]");
+                    }
+
+                    enumerate_str += EnumerateNodes(MetaObjectEntry.Data, out ChildNewData, CurrentNode, Level + 1, MetaObjectEntry.TypeStr == null ? "" : MetaObjectEntry.TypeStr);
+
+                    if (ChildNewData != null)
+                    {
+                       MetaObjectEntry.Data = ChildNewData;
+                    }
+                }
+            }
+            else
+            {
+                enumerate_str += String.Format( "{0} Object Type: {1}\r\n", Prefix, DataType );
+                if (DataType == "ArrayList")
+                {
+                    foreach (object sub_entry in (System.Collections.ArrayList)CurrentObject)
+                    {
+                        enumerate_str += EnumerateNodes(sub_entry, out ChildNewData, ParentNode, Level + 1);
+                    }
+                }
+                else if (DataType == "Dictionary`2")
+                {
+                    Dictionary<string, object> ADic = (Dictionary<string, object>)CurrentObject;
+                    foreach (KeyValuePair<string, object> entry in ADic)
+                    {
+                        enumerate_str += String.Format("{0} + entry.Key: {1}\r\n", Prefix, entry.Key);
+
+                        AddNode(ParentNode, out CurrentNode, entry.Key);
+ 
+                        enumerate_str += EnumerateNodes(entry.Value, out ChildNewData, CurrentNode, Level + 1);
+                    }
+                }
+                else if (DataType == "AMF3Object")
+                {
+                    AMF3Object CurrentAMF3Object = (AMF3Object)CurrentObject;
+
+                    enumerate_str += String.Format("{0} AMF3Object.TypeIdentifier: {1}\r\n", Prefix, CurrentAMF3Object.TypeIdentifier);
+
+                    if (ParentNode != null)
+                    {
+                        if (ParentNode.Text == "")
+                        {
+                            ParentNode.Text = CurrentAMF3Object.TypeIdentifier;
+                        }
+                        else
+                        {
+                            ParentNode.Text = ParentNode.Text + " - " + CurrentAMF3Object.TypeIdentifier;
+                        }
+                    }
+
+                    if (_DebugLevel > 2)
+                        AddDebugMessage(Prefix + "Parameters.Count:" + CurrentAMF3Object.Parameters.Count + "\r\n");
+
+                    for (int i = 0; i < CurrentAMF3Object.Parameters.Count; i++)
+                    {
+                        if (CurrentAMF3Object.ClassMemberDefinitions.Count > 0)
+                        {
+                            AddNode(ParentNode, out CurrentNode, CurrentAMF3Object.ClassMemberDefinitions[i], TypeStr);
+                        }
+                        else
+                        {
+                            //CurrentNode = ParentNode.Nodes.Add("");
+                            CurrentNode = ParentNode;
+                        }
+                        enumerate_str += EnumerateNodes(CurrentAMF3Object.Parameters[i], out ChildNewData, CurrentNode, Level + 1);
+                    }
+
+                    if (_DebugLevel > 2)
+                        AddDebugMessage(Prefix + "DynamicMembers.Count:" + CurrentAMF3Object.DynamicMembers.Count + "\r\n");
+
+                    foreach (KeyValuePair<string, Object> entry in CurrentAMF3Object.DynamicMembers)
+                    {
+                        enumerate_str += String.Format("{0} Key: {1}\r\n", Prefix, entry.Key );
+
+                        AddNode(ParentNode, out CurrentNode, entry.Key, TypeStr);
+                        enumerate_str += EnumerateNodes(entry.Value, out ChildNewData, CurrentNode, Level + 1);
+                    }
+
+                    if (_DebugLevel > 2)
+                        AddDebugMessage(Prefix + "DynamicMembers Enumeration Finished!\r\n");
+                }
+                else if (DataType == "Int32" || DataType == "UInt32" || DataType == "Double" || DataType == "DateTime" || DataType == "String")
+                {
+                    NewData = AddNode(ParentNode, out CurrentNode, CurrentObject, TypeStr);
+                }
+                else
+                {
+                    enumerate_str += String.Format("{0} Unrecognized Type: {1}\r\n", Prefix, CurrentObject.GetType().Name);
+                }
             }
         }
         catch (Exception e)
         {
-            AddDebugMessage( "Exception: " + e.StackTrace+"\r\n" );
-            AddDebugMessage( TargetObject.ToString()+"\r\n" );
+            if (_DebugLevel >= 0)
+            {
+                AddDebugMessage("Exception: " + e.StackTrace + "\r\n");
+                AddDebugMessage(CurrentObject.ToString() + "\r\n");
+            }
         }
 
+        Exit();
         return enumerate_str;
     }
 
     public void DumpHexRemaining()
     {
-        string Prefix = new string(' ', Level);
-        if (Offset < Data.Length)
+        if (Offset < Data.Count)
         {
-            DumpHex(Offset, Data.Length - Offset);
-            AddDebugMessage( "Remaining Bytes\r\n" );
+            DumpHex(Offset, Data.Count - Offset);
+            AddDebugMessage("Remaining Bytes\r\n");
         }
     }
 
     public void DumpHex(int DumpOffset, int Length)
     {
-        string Prefix = new string(' ', Level);
         if (Length == 0)
-            Length = Data.Length - DumpOffset;
+            Length = Data.Count - DumpOffset;
         string AsciiStr = "";
 
-        AddDebugMessage( Prefix );
-        for (int i = 0; i < Length && i < Data.Length ; i++)
+        AddDebugMessage(Prefix);
+        for (int i = 0; i < Length && i < Data.Count; i++)
         {
             AddDebugMessage("{0:x2} ", Data[DumpOffset + i]);
             string AsciiCh = ".";
@@ -377,18 +711,23 @@ public class AMFDataParser
             AsciiStr += AsciiCh;
             if (i % 16 == 15)
             {
-                AddDebugMessage( "   " + AsciiStr + "\r\n" + Prefix );
+                AddDebugMessage("   " + AsciiStr + "\r\n" + Prefix);
                 AsciiStr = "";
             }
         }
 
         AddDebugMessage("   " + AsciiStr + "\r\n" + Prefix);
-        AddDebugMessage( "\r\n" );
+        AddDebugMessage("\r\n");
     }
 
-    public int ReadByte()
+    public byte ReadByte()
     {
         return Data[Offset++];
+    }
+
+    public void WriteByte(byte value)
+    {
+        Data.Insert(Offset++, value);
     }
 
     public int ReadU16()
@@ -396,22 +735,65 @@ public class AMFDataParser
         return Data[Offset++] << 8 | Data[Offset++];
     }
 
+    public void WriteU16(int Length)
+    {
+        Data.Insert(Offset++,(byte)((Length << 8) & 0xff));
+        Data.Insert(Offset++,(byte)((Length & 0xff)));
+    }
+
     public int ReadLong()
     {
         return Data[Offset++] << 24 | Data[Offset++] << 16 | Data[Offset++] << 8 | Data[Offset++];
     }
 
+    public void WriteLong(int value)
+    {
+        Data.Insert(Offset++, (byte)((value >> 24) & 0xff));
+        Data.Insert(Offset++, (byte)((value >> 16) & 0xff));
+        Data.Insert(Offset++, (byte)((value >> 8) & 0xff));
+        Data.Insert(Offset++, (byte)(value & 0xff));
+    }
+
     public double ReadDouble()
     {
-        byte[] bytes = { Data[Offset+7], Data[Offset+6], Data[Offset+5], Data[Offset+4], Data[Offset+3], Data[Offset+2], Data[Offset+1], Data[Offset] };
-        Offset = Offset + 8;
+        byte[] bytes = { Data[Offset + 7], Data[Offset + 6], Data[Offset + 5], Data[Offset + 4], Data[Offset + 3], Data[Offset + 2], Data[Offset + 1], Data[Offset] };
+
         Double value = BitConverter.ToDouble(bytes, 0);
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: value: {2:F} @0x{3:x}\r\n{0} 0x{4:x} 0x{5:x} 0x{6:x} 0x{7:x}\r\n{0} 0x{8:x} 0x{9:x} 0x{10:x} 0x{11:x}\r\n",
+                new string(' ', Level),
+                System.Reflection.MethodBase.GetCurrentMethod().Name,
+                value,
+                Offset - 8,
+                Data[Offset], Data[Offset + 1], Data[Offset + 2], Data[Offset + 3],
+                Data[Offset + 4], Data[Offset + 5], Data[Offset + 6], Data[Offset + 7]
+                );
+
+        Offset = Offset + 8;
+
         return value;
     }
 
-    public string ReadBuffer(int Length)
+    public void WriteDouble(double value)
     {
-        Level++;
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: value: {2}\r\n",
+                new string(' ', Level),
+                System.Reflection.MethodBase.GetCurrentMethod().Name,
+                value);
+
+        long value64 = BitConverter.DoubleToInt64Bits(value);
+
+        for (int i = 0; i < 8; i++)
+        {
+            Data.Insert(Offset++,(byte)((value64 >> 8 * (7 - i)) & 0xff));
+        }
+    }
+
+    public string ReadString(int Length)
+    {
+        Enter();
 
         string RetStr = "";
         int LastOffset = Offset;
@@ -421,46 +803,37 @@ public class AMFDataParser
         {
             RetStr += System.Convert.ToChar(Data[i]).ToString();
         }
-        Level--;
+        Exit();
         return RetStr;
     }
 
-    public string ReadString()
+    public void WriteString(string str)
     {
-        Level++;
-        string Prefix = new string(' ', Level);
-
-        int Length = ReadU16();
-
-        if(_DebugLevel>3)
-            AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " Reading " + Length + "Bytes @ Offset "+Offset+"\r\n" );
-        
-        string Ret = ReadBuffer(Length);
-        Level--;
-
-        if (_DebugLevel > 3)
-            AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + "[" + Ret + "]\r\n");
-
-        return Ret;
+        for (int i = 0; i < str.Length; i++)
+        {
+            Data.Insert(Offset++, BitConverter.GetBytes((char)str[i])[0]);
+        }
     }
 
     public uint ReadAMF3Int()
     {
-        Level++;
-        string Prefix = new string(' ', Level);
+        Enter();
+
         uint Byte = (uint)ReadByte();
+
         if (Byte < 128)
         {
-            Level--;
+            Exit();
             return Byte;
         }
         else
         {
             Byte = (Byte & 0x7f) << 7;
             uint NewByte = (uint)ReadByte();
+
             if (NewByte < 128)
             {
-                Level--;
+                Exit();
                 return Byte | NewByte;
             }
             else
@@ -469,17 +842,18 @@ public class AMFDataParser
                 NewByte = (uint)ReadByte();
                 if (NewByte < 128)
                 {
-                    Level--;
+                    Exit();
                     return Byte | NewByte;
                 }
                 else
                 {
                     Byte = (Byte | (NewByte & 0x7f)) << 8;
                     NewByte = (uint)ReadByte();
+
                     Byte |= NewByte;
                     if ((Byte & 0x10000000) != 0)
                         Byte |= 0xe0000000;
-                    Level--;
+                    Exit();
                     return Byte;
                 }
 
@@ -487,95 +861,204 @@ public class AMFDataParser
         }
     }
 
+    public void WriteAMF3Int(uint value)
+    {
+        Enter();
+
+        if (value < 128)
+        {
+            byte[] bytes = new byte[1];
+            bytes[0] = (byte)value;
+
+            Data.Insert(Offset++,bytes[0]);
+        }
+        else
+        {
+            byte[] tmp_bytes = new byte[5];
+
+            uint tmp_value = value;
+            int index = 0;
+            while (tmp_value > 0)
+            {
+                tmp_bytes[index] = (byte) ( tmp_value & 0x7f );
+                tmp_value >>= 7;
+                index++;
+            }
+
+            for (int i = index - 1; i > 0; i--)
+            {
+                Data.Insert(Offset++, (byte) ( tmp_bytes[i] | 0x80 ) );
+            }
+
+            Data.Insert(Offset++, tmp_bytes[0]);
+            //TODO: Add other cases
+        }
+
+        Exit();
+    }
+
     public string ReadAMF3String()
     {
-        Level++;
-        string Prefix = new string(' ', Level);
-        uint StrRef = ReadAMF3Int();
-        string Str;
+        Enter();
 
         if (_DebugLevel > 4)
-            AddDebugMessage("{0}{1}: StrRef: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, StrRef);
+            AddDebugMessage("{0}{1}: @0x{2:x}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Offset );
+
+        uint StrRef = ReadAMF3Int();
+        string Str = "";
+
+        if (_DebugLevel > 4)
+            AddDebugMessage("{0} StrRef: 0x{2:x} {3}: 0x{4:x}\r\n",
+                           Prefix,
+                           System.Reflection.MethodBase.GetCurrentMethod().Name,
+                           StrRef,
+                           (StrRef&1)==1 ? "Length": "Index",
+                           StrRef >> 1
+                       );
+
         if ((StrRef & 1) == 1)
         {
             uint StrLen = StrRef >> 1;
 
-            Str = ReadBuffer((int)StrLen);
+            Str = ReadString((int)StrLen);
             if (_DebugLevel > 4)
-                AddDebugMessage( Prefix + Str + "\r\n" );
-            Level--;
+                AddDebugMessage("{0} Str: [{2}] Refs Table Index: 0x{3:x}\r\n", 
+                        Prefix, 
+                        System.Reflection.MethodBase.GetCurrentMethod().Name, 
+                        Str, 
+                        StringRefs.Count 
+                    );
 
-            if ( Str != null ) {
+            if (Str != null && StringRefs != null)
+            {
                 StringRefs.Add(Str);
             }
         }
         else
         {
             uint j = StrRef >> 1;
-            Str = (string)StringRefs[(int)j];
+
+            if (StringRefs != null)
+            {
+                Str = (string)StringRefs[(int)j];
+
+                if (_DebugLevel > 4)
+                    AddDebugMessage("{0} Str:[{2}] from Refs Table\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Str);
+
+            }
         }
 
+        Exit();
         return Str;
-        
+    }
+
+    public void WriteAMF3String(string str)
+    {
+        Enter();
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: [{2}] @0x{3:x}\r\n",
+                    Prefix,
+                    System.Reflection.MethodBase.GetCurrentMethod().Name,
+                    str,
+                    Offset
+                );
+
+        if (str != "")
+        {
+            for (int index = 1; index < NewStringRefs.Count; index++)
+            {
+                if (str == (string)NewStringRefs[index])
+                {
+                    if (_DebugLevel > 2)
+                        AddDebugMessage("{0} Found {2}=={3} Index: 0x{4:x} Write: 0x{5:x}\r\n",
+                                Prefix,
+                                System.Reflection.MethodBase.GetCurrentMethod().Name,
+                                str,
+                                NewStringRefs[index],
+                                index,
+                                index << 1
+                            );
+
+                    WriteAMF3Int((uint)(index << 1));
+                    Exit();
+                    return;
+                }
+            }
+        }
+
+        WriteAMF3Int( (uint) (str.Length << 1) | 0x1);
+        WriteString(str);
+
+        NewStringRefs.Add(str);
+
+        Exit();
     }
 
     public AMF3Object ReadAMF3Object()
     {
         AMF3Object ReturnValue = new AMF3Object();
-        Level++;
-        string Prefix = new string(' ', Level);
 
-        uint ReferncePtr = ReadAMF3Int();
-        if(_DebugLevel>2)
-            AddDebugMessage("{0}{1}: ReferncePtr: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReferncePtr);
+        Enter();
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: @0x{2:x}\r\n", 
+                Prefix, 
+                System.Reflection.MethodBase.GetCurrentMethod().Name, 
+                Offset);
+
+        uint ReferencePtr = ReadAMF3Int();
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0} ReferencePtr: 0x{2:x}\r\n",
+                    Prefix,
+                    System.Reflection.MethodBase.GetCurrentMethod().Name,
+                    ReferencePtr
+                );
 
         ReturnValue.TypeIdentifier = "";
         ReturnValue.IsExternalizable = 0;
         ReturnValue.IsDynamic = 0;
         ReturnValue.ClassMemberCount = 0;
-        ReturnValue.IsInLine = (ReferncePtr & 1);
-        ReferncePtr >>= 1;
+        ReturnValue.IsInLine = (ReferencePtr & 1);
+        ReferencePtr >>= 1;
 
         if (_DebugLevel > 2)
-            AddDebugMessage("{0}{1}: IsInLine: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsInLine);
+            AddDebugMessage("{0} IsInLine: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsInLine);
 
         if (ReturnValue.IsInLine == 1)
         {
-            ReturnValue.IsInLineClassDef = ReferncePtr & 1;
-            ReferncePtr >>= 1;
+            ReturnValue.IsInLineClassDef = ReferencePtr & 1;
+            ReferencePtr >>= 1;
             if (_DebugLevel > 2)
-                AddDebugMessage("{0}{1}: IsInLineClassDef: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsInLineClassDef);
+                AddDebugMessage("{0} IsInLineClassDef: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsInLineClassDef);
 
             if (ReturnValue.IsInLineClassDef == 1)
             {
                 ReturnValue.TypeIdentifier = ReadAMF3String();
+                ReturnValue.IsExternalizable = ReferencePtr & 1;
+
+                ReferencePtr >>= 1;
+                ReturnValue.IsDynamic = ReferencePtr & 1;
+                ReferencePtr >>= 1;
+                ReturnValue.ClassMemberCount = ReferencePtr;
 
                 if (_DebugLevel > 0)
-                    AddDebugMessage( Prefix + "TypeIdentifier:" + ReturnValue.TypeIdentifier + "\r\n" );
-                ReturnValue.IsExternalizable = ReferncePtr & 1;
-
-                ReferncePtr >>= 1;
-                if (_DebugLevel > 2)
-                    AddDebugMessage("{0}{1}: IsExternalizable: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsExternalizable);
-
-                ReturnValue.IsDynamic = ReferncePtr & 1;
-
-                ReferncePtr >>= 1;
-                if (_DebugLevel > 2)
-                    AddDebugMessage("{0}{1}: IsDynamic: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsDynamic);
-
-                ReturnValue.ClassMemberCount = ReferncePtr;
-                if (_DebugLevel > 2)
-                    AddDebugMessage("{0}{1}: ClassMemberCount: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.ClassMemberCount);
+                {
+                    AddDebugMessage("{0} TypeIdentifier: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.TypeIdentifier);
+                    AddDebugMessage("{0} IsExternalizable: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsExternalizable);
+                    AddDebugMessage("{0} IsDynamic: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.IsDynamic);
+                    AddDebugMessage("{0} ClassMemberCount: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.ClassMemberCount);
+                }
 
                 for (int i = 0; i < ReturnValue.ClassMemberCount; i++)
                 {
                     string ClassMemberDefinition = ReadAMF3String();
                     ReturnValue.ClassMemberDefinitions.Add(ClassMemberDefinition);
-                    if (_DebugLevel > 2)
-                        AddDebugMessage( Prefix + "ClassMemberDefinition(" + i + "): " + ClassMemberDefinition + "\r\n" );
-                }
 
+                    if (_DebugLevel > 2)
+                        AddDebugMessage("{0} ClassMemberDefinition: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ClassMemberDefinition);
+                }
 
                 ClassDefinitions.Add(
                     new ClassDefinition(
@@ -588,16 +1071,28 @@ public class AMFDataParser
             }
             else
             {
-                ClassDefinition OneClassDefinition = (ClassDefinition)ClassDefinitions[(int)ReferncePtr];
-                ReturnValue.TypeIdentifier = OneClassDefinition.TypeIdentifier;
-                ReturnValue.ClassMemberDefinitions = OneClassDefinition.ClassMemberDefinitions;
-                ReturnValue.IsExternalizable = OneClassDefinition.IsExternalizable;
-                ReturnValue.IsDynamic = OneClassDefinition.IsDynamic;
+                if (_DebugLevel > 2)
+                    AddDebugMessage("{0} ReferencePtr: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReferencePtr);
+
+                if (ClassDefinitions != null)
+                {
+                    ClassDefinition OneClassDefinition = (ClassDefinition)ClassDefinitions[(int)ReferencePtr];
+
+                    if (_DebugLevel > 2)
+                        AddDebugMessage("{0} OneClassDefinition Found\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name );
+
+                    ReturnValue.TypeIdentifier = OneClassDefinition.TypeIdentifier;
+                    ReturnValue.ClassMemberDefinitions = OneClassDefinition.ClassMemberDefinitions;
+                    ReturnValue.IsExternalizable = OneClassDefinition.IsExternalizable;
+                    ReturnValue.IsDynamic = OneClassDefinition.IsDynamic;
+                }
             }
         }
         else
         {
-            AddDebugMessage( Prefix + "TODO: Use ReferncePtr\r\n\r\n" );
+            AddDebugMessage(Prefix + "TODO: Use ReferencePtr\r\n\r\n");
+
+            Exit();
             return ReturnValue;
         }
 
@@ -607,20 +1102,24 @@ public class AMFDataParser
             {
                 case "flex.messaging.io.ArrayCollection":
                 case "flex.messaging.io.ObjectProxy":
-                    TypeAndData DataArray = ReadAMF3Data();
+                    MetaObject DataArray = ReadAMF3();
                     ReturnValue.Parameters.Add(DataArray);
                     break;
+
                 case "DSK":
                     // skip two bytes
-                    Offset+=2;
+                    Offset += 2;
+                    AddDebugMessage(String.Format("{0} TODO: Skip 2 bytes in {1}", Prefix, ReturnValue.TypeIdentifier));
+
                     // Read the inner type and add it
-                    TypeAndData StartType = ReadAMF3Data();
+                    MetaObject StartType = ReadAMF3();
                     String StartClass = ((AMF3Object)StartType.Data).TypeIdentifier;
                     ReturnValue.ClassMemberDefinitions.Add(StartClass);
                     ReturnValue.Parameters.Add(StartType);
                     break;
+
                 default:
-                    AddDebugMessage( Prefix + "Can't read " + ReturnValue.TypeIdentifier );
+                    AddDebugMessage(Prefix + "Can't read " + ReturnValue.TypeIdentifier);
                     break;
             }
         }
@@ -628,10 +1127,11 @@ public class AMFDataParser
         {
             for (int i = 0; i < ReturnValue.ClassMemberDefinitions.Count; i++)
             {
-                
+
                 if (_DebugLevel > 0)
-                    AddDebugMessage( Prefix + ReturnValue.ClassMemberDefinitions[i].ToString() + "\r\n" );
-                ReturnValue.Parameters.Add(ReadAMF3Data()); //Value
+                    AddDebugMessage(Prefix + ReturnValue.ClassMemberDefinitions[i].ToString() + "\r\n");
+
+                ReturnValue.Parameters.Add(ReadAMF3()); //Value
             }
 
             if (ReturnValue.IsDynamic == 1)
@@ -639,96 +1139,283 @@ public class AMFDataParser
                 string Key = ReadAMF3String(); //Key
                 while (Key.Length > 0)
                 {
-                    if (_DebugLevel > 0)
-                        AddDebugMessage( Prefix + "Key=" + Key );
-                    ReturnValue.DynamicMembers.Add(Key, ReadAMF3Data()); //Value                    
+                    if (_DebugLevel > 2)
+                        AddDebugMessage("{0} Key: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Key);
+
+                    ReturnValue.DynamicMembers.Add(Key, ReadAMF3()); //Value                    
                     Key = ReadAMF3String(); //Key
                 }
             }
         }
 
-        Level--;
+        AddDebugMessage("{0} End Offset: 0x{1:x}\r\n", Prefix, Offset );
+        Exit();
         return ReturnValue;
+    }
+
+    public void WriteAMF3Object(AMF3Object Value)
+    {
+        Enter();
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: \r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name);
+
+        uint ReferencePtr = 0;
+
+        ReferencePtr |= Value.IsInLine;
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0} IsInLine: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.IsInLine);
+
+        if (Value.IsInLine == 1)
+        {
+            ReferencePtr |= Value.IsInLineClassDef << 1;
+
+            if (_DebugLevel > 2)
+                AddDebugMessage("{0} IsInLineClassDef: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.IsInLineClassDef);
+
+            if (Value.IsInLineClassDef == 1)
+            {
+                ReferencePtr |= Value.IsExternalizable << 2;
+                ReferencePtr |= Value.IsDynamic << 3;
+                ReferencePtr |= Value.ClassMemberCount << 4;
+
+                WriteAMF3Int( (uint) ReferencePtr);
+                WriteAMF3String( (string) Value.TypeIdentifier);
+
+                for (int i = 0; i < Value.ClassMemberCount; i++)
+                {
+                    if (_DebugLevel > 2)
+                        AddDebugMessage("{0} ClassMemberDefinition: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.ClassMemberDefinitions[i]);
+
+                    WriteAMF3String( (string) Value.ClassMemberDefinitions[i]);
+                }
+
+                NewClassDefinitions.Add(
+                    new ClassDefinition(
+                        Value.TypeIdentifier,
+                        Value.ClassMemberDefinitions,
+                        Value.IsExternalizable,
+                        Value.IsDynamic
+                    )
+                );
+            }
+            else
+            {
+                if (_DebugLevel > 2)
+                    AddDebugMessage("{0} Finding Index {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReferencePtr);
+
+                for (int index = 0; index < NewClassDefinitions.Count; index++)
+                {
+                    ClassDefinition OneClassDefinition = (ClassDefinition)NewClassDefinitions[index];
+
+                    if (Value.TypeIdentifier == OneClassDefinition.TypeIdentifier)
+                    {
+                        ReferencePtr |= (uint)(index << 1);
+
+                        if (_DebugLevel > 2)
+                            AddDebugMessage("{0} Found Index: 0x{2:x} ReferencePtr: 0x{3:x}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, index, ReferencePtr);
+
+                        
+                        break;
+                    }
+                }
+
+                WriteAMF3Int((uint)ReferencePtr);
+            }
+        }
+        else
+        {
+            WriteAMF3Int((uint)ReferencePtr);
+        }
+
+        if (Value.IsExternalizable == 1)
+        {
+            //TODO: Write
+            AddDebugMessage(Prefix + "TODO: Write Externalizable Object\r\n");
+            switch (Value.TypeIdentifier)
+            {
+                case "flex.messaging.io.ArrayCollection":
+                case "flex.messaging.io.ObjectProxy":
+                    //MetaObject DataArray = WriteAMF3();
+                    //Value.Parameters.Add(DataArray);
+                    break;
+
+                case "DSK":
+                    // skip two bytes
+                    //Offset += 2;
+
+                    // Write the inner type and add it
+                    //MetaObject StartType = WriteAMF3();
+                    //String StartClass = ((AMF3Object)StartType.Data).TypeIdentifier;
+                    //Value.ClassMemberDefinitions.Add(StartClass);
+                    //Value.Parameters.Add(StartType);
+                    break;
+
+                default:
+                    AddDebugMessage(Prefix + "Can't read " + Value.TypeIdentifier);
+                    break;
+            }
+        }
+        else
+        {
+            //TODO:
+            if (_DebugLevel > 2)
+                AddDebugMessage("{0} Value.ClassMemberDefinitions.Count: 0x{2:x}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.ClassMemberDefinitions.Count);
+
+            foreach (MetaObject CurrentMetaObject in Value.Parameters)
+            {
+                if (_DebugLevel > 0)
+                    AddDebugMessage("{0} WriteAMF3 for {2}\r\n", 
+                            Prefix, 
+                            System.Reflection.MethodBase.GetCurrentMethod().Name, 
+                            CurrentMetaObject
+                        );
+                WriteAMF3(CurrentMetaObject);
+            }
+
+            if (Value.IsDynamic == 1)
+            {
+                foreach(KeyValuePair<string, Object> kvp in Value.DynamicMembers)
+                {
+                    if (_DebugLevel > 2)
+                        AddDebugMessage("{0} Key: {2:G} - {3}\r\n",
+                                Prefix,
+                                System.Reflection.MethodBase.GetCurrentMethod().Name,
+                                kvp.Key,
+                                kvp.Value);
+
+                    WriteAMF3String( (string) kvp.Key );
+                    WriteAMF3( (MetaObject) kvp.Value );
+                }
+
+                WriteAMF3String("");
+            }
+        }
+        Exit();
     }
 
     public ArrayList ReadAMF3Array()
     {
-        Level++;
+        Enter();
 
-        string Prefix = new string(' ', Level);
-        uint ReferncePtr = ReadAMF3Int();
-        Dictionary<string, Object> KeyValues = new Dictionary<string, Object>();
+        uint ReferencePtr = ReadAMF3Int();
+        Dictionary<string, object> KeyValues = new Dictionary<string, object>();
         ArrayList DataList = new ArrayList();
 
         if (_DebugLevel > 2)
-            AddDebugMessage("{0}{1}: ReferncePtr: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReferncePtr);
+            AddDebugMessage("{0}{1}: ReferencePtr: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReferencePtr);
 
-        uint InLine = ReferncePtr & 1;
-        ReferncePtr >>= 1;
+        uint InLine = ReferencePtr & 1;
+        ReferencePtr >>= 1;
         if (InLine != 0)
         {
             string Key = ReadAMF3String();
             while (Key.Length > 0)
             {
-                KeyValues.Add(Key,ReadAMF3Data());
+                KeyValues.Add(Key, ReadAMF3());
                 if (_DebugLevel > 2)
-                    AddDebugMessage( Key + "\r\n" );
+                    AddDebugMessage(Key + "\r\n");
                 Key = ReadAMF3String();
             }
 
-            for (int i = 0; i < ReferncePtr; i++)
+            for (int i = 0; i < ReferencePtr; i++)
             {
-                DataList.Add(ReadAMF3Data()); //Value
+                DataList.Add(ReadAMF3()); //Value
             }
         }
         else
         {
             //TODO: Use ref
-            AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: \r\n" );
+            AddDebugMessage(Prefix + "TODO: Use Ref to Read AMF3Array\r\n");
         }
 
-        Level--;
-
-        ArrayList ReturnValues=new ArrayList();
+        ArrayList ReturnValues = new ArrayList();
         ReturnValues.Add(KeyValues);
         ReturnValues.Add(DataList);
+
+        Exit();
         return ReturnValues;
+    }
+
+    public void WriteAMF3Array(ArrayList Values)
+    {
+        Enter();
+        Dictionary<string, object> KeyValues = (Dictionary<string, object>) Values[0];
+        ArrayList DataList = (ArrayList) Values[1];
+
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: \r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name);
+
+        WriteAMF3Int((uint)((DataList.Count << 1) | 1));
+
+        foreach (KeyValuePair<string, Object> kvp in KeyValues)
+        {
+            WriteAMF3String(kvp.Key);
+            WriteAMF3( (MetaObject) kvp.Value);
+        }
+        WriteAMF3String("");
+
+        for (int i = 0; i < DataList.Count; i++)
+        {
+            WriteAMF3( (MetaObject) DataList[i]);
+        }
+
+        Exit();
     }
 
     public DateTime ReadAMF3Date()
     {
-        Level++;
-        string Prefix = new string(' ', Level);
+        Enter();
 
-        uint ReferncePtr = ReadAMF3Int();
-        uint InLine = ReferncePtr&0x1;
-        ReferncePtr >>= 1;
+        uint ReferencePtr = ReadAMF3Int();
+        bool InLine = (ReferencePtr & 0x1) == 0x1;
+        ReferencePtr >>= 1;
 
         DateTime DateValue = new DateTime(1970, 1, 1);
 
-        if (InLine == 1)
+        if (InLine)
         {
-            DateValue = DateValue.AddMilliseconds ( ReadDouble() );
+            if (_DebugLevel > 2)
+                AddDebugMessage("{0}{1}: value: {2:F} @0x{3:x}\r\n{0} 0x{4:x} 0x{5:x} 0x{6:x} 0x{7:x}\r\n{0} 0x{8:x} 0x{9:x} 0x{10:x} 0x{11:x}\r\n",
+                    Prefix,
+                    System.Reflection.MethodBase.GetCurrentMethod().Name,
+                    0,
+                    Offset,
+                    Data[Offset], Data[Offset + 1], Data[Offset + 2], Data[Offset + 3],
+                    Data[Offset + 4], Data[Offset + 5], Data[Offset + 6], Data[Offset + 7]
+                    );
+            DateValue = DateValue.AddMilliseconds(ReadDouble());
         }
         else
         {
             //TODO: Referencing
+            AddDebugMessage(Prefix + "TODO: Read Date using referencing\r\n");
         }
-        Level--;
-        return DateValue ;
+        Exit();
+        return DateValue;
     }
 
-    public TypeAndData ReadAMF3Data()
+    public void WriteAMF3Date(DateTime date_time) //TODO: Write
     {
-        Level++;
-        string Prefix = new string(' ', Level);
+        Enter();
+        AddDebugMessage(Prefix + "TODO: WriteAMF3Date\r\n");
+        Exit();
+    }
+
+    public MetaObject ReadAMF3()
+    {
+        Enter();
         int Type = ReadByte();
+
         if (_DebugLevel > 2)
             AddDebugMessage("{0}{1}: Type: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Type);
 
-        TypeAndData ReturnValue=new TypeAndData();
+        MetaObject ReturnValue = new MetaObject();
         ReturnValue.Type = Type;
         ReturnValue.Data = null;
+        ReturnValue.Offset = Offset;
 
         switch (Type)
         {
@@ -743,12 +1430,12 @@ public class AMFDataParser
                 break;
 
             case 0x02:
-                //false; //boolean false
+                //boolean false
                 ReturnValue.TypeStr = "false";
                 break;
 
             case 0x03:
-                //true;  //boolean true
+                //boolean true
                 ReturnValue.TypeStr = "true";
                 break;
 
@@ -757,7 +1444,7 @@ public class AMFDataParser
                 ReturnValue.TypeStr = "Amf3Int";
                 ReturnValue.Data = ReadAMF3Int();
                 if (_DebugLevel > 2)
-                    AddDebugMessage("{0}{1}: Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.Data);
+                    AddDebugMessage("{0} Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.Data);
                 break;
 
             case 0x05:
@@ -769,15 +1456,15 @@ public class AMFDataParser
                 //Amf3String
                 ReturnValue.TypeStr = "Amf3String";
                 ReturnValue.Data = ReadAMF3String();
-                if (_DebugLevel > 0)
-                    AddDebugMessage( Prefix + ReturnValue.Data + "\r\n" );
+                if (_DebugLevel > 2)
+                    AddDebugMessage("{0} Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.Data);
                 break;
 
             case 0x07:
                 ReturnValue.TypeStr = "Amf3XmlString";
                 //TODO: Amf3XmlString
-                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3String\r\n");
-                DumpHex(Offset, 20);
+                if (_DebugLevel > 2)
+                    AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3String\r\n");
                 break;
 
             case 0x08:
@@ -801,198 +1488,425 @@ public class AMFDataParser
             case 0x0B:
                 //TODO: Amf3XmlString
                 ReturnValue.TypeStr = "Amf3XmlString";
-                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3XmlString\r\n");
-                DumpHex(Offset, 20);
+
+                if (_DebugLevel > 2)
+                    AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3XmlString\r\n");
                 break;
 
             case 0x0C:
                 //TODO: Amf3ByteArray
                 ReturnValue.TypeStr = "Amf3ByteArray";
-                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3ByteArray\r\n");
-                DumpHex(Offset, 20);
+
+                if (_DebugLevel > 2)
+                    AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3ByteArray\r\n");
                 break;
         }
 
-        Level--;
+        Exit();
         return ReturnValue;
     }
 
-    public ArrayList ReadArray()
+    public void WriteAMF3(MetaObject Value)
     {
-        Level++;
-        string Prefix = new string(' ', Level);
+        Enter();
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: Type: {2:G} Data: {3}\r\n",
+                   Prefix,
+                   System.Reflection.MethodBase.GetCurrentMethod().Name,
+                   Value.Type,
+                   Value.Data
+                  );
+
+        WriteByte( (byte) Value.Type);
+
+        switch (Value.Type)
+        {
+            case 0x00:
+                //undefined
+                break;
+
+            case 0x01:
+                //null; 
+                break;
+
+            case 0x02:
+                //boolean false
+                break;
+
+            case 0x03:
+                //boolean true
+                break;
+
+            case 0x04:
+                //Amf3Int
+                if (_DebugLevel > 2)
+                    AddDebugMessage("{0} Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.Data);
+
+                WriteAMF3Int( (uint) Value.Data);
+                break;
+
+            case 0x05:
+                WriteDouble( (double) Value.Data);
+
+                break;
+
+            case 0x06:
+                //Amf3String
+                if (_DebugLevel > 2)
+                    AddDebugMessage("{0} Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.Data);
+
+                WriteAMF3String( (string) Value.Data);
+                break;
+
+            case 0x07:
+                //TODO: Amf3XmlString
+                if (_DebugLevel > 2)
+                    AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3String\r\n");
+                break;
+
+            case 0x08:
+                //Amf3Date
+                WriteAMF3Date( (DateTime) Value.Data);
+                break;
+
+            case 0x09: //OK
+                //Amf3Array
+                WriteAMF3Array( (ArrayList) Value.Data);
+                break;
+
+            case 0x0A:
+                //Amf3Object
+                WriteAMF3Object( (AMF3Object) Value.Data);
+                break;
+
+            case 0x0B:
+                //TODO: Amf3XmlString
+                if (_DebugLevel > 2)
+                    AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3XmlString\r\n");
+                break;
+
+            case 0x0C:
+                //TODO: Amf3ByteArray
+                if (_DebugLevel > 2)
+                    AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3ByteArray\r\n");
+                break;
+        }
+
+        Exit();
+    }
+
+    public ArrayList ReadAMF0StrictArray()
+    {
+        Enter();
 
         ArrayList ReturnValues = new ArrayList();
-        int Length = ReadLong();
-        AddDebugMessage("{0}{1}: Length: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Length);
+        int Count = ReadLong();
 
-        for (int i = 0; i < Length; i++)
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: Offset: 0x{2:x} Length: 0x{3:x}\r\n",
+                    Prefix,
+                    System.Reflection.MethodBase.GetCurrentMethod().Name,
+                    Offset,
+                    Count);
+
+        for (int i = 0; i < Count; i++)
         {
-            TypeAndData analyzed_data = ReadData();
+            if (_DebugLevel > 2)
+                AddDebugMessage("{0} Array Offset: 0x{1:x}\r\n", Prefix, Offset);
+
+            MetaObject analyzed_data = ReadAMF0();
             ReturnValues.Add(analyzed_data);
         }
-        Level--;
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: End Offset: 0x{2:x}\r\n",
+                    Prefix,
+                    System.Reflection.MethodBase.GetCurrentMethod().Name,
+                    Offset);
+
+        Exit();
         return ReturnValues;
     }
 
-    enum AMFDataTypes
+    public void WriteAMF0StrictArray(ArrayList Values)
     {
-        Number = 0,
-        Boolean,
-        String,
-        Object,
-        Null,
-        Undefined,
-        Reference,
-        MixedArray,
-        Array = 10,
-        Date,
-        LongUTF,
-        Internal,
-        XML = 15,
-        CustomClass,
-        AMF3
+        Enter();
+
+        WriteLong(Values.Count);
+
+        for (int i = 0; i < Values.Count; i++)
+        {
+            WriteAMF0( (MetaObject) Values[i]);
+        }
+
+        Exit();
     }
 
-    public TypeAndData ReadData()
+    public string ReadAMF0String()
     {
-        Level++;
-        string Prefix = new string(' ', Level);
+        Enter();
+
+        int Length = ReadU16();
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: Offset: 0x{2:x}\r\n",
+                    Prefix,
+                    System.Reflection.MethodBase.GetCurrentMethod().Name,
+                    Offset);
+
+        string Ret = ReadString(Length);
+        
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0} {1} Offset: 0x{2:x}\r\n", Prefix, Ret, Offset);
+
+        Exit();
+        return Ret;
+    }
+
+    public void WriteAMF0String(string str)
+    {
+        WriteU16(str.Length);
+        WriteString(str);
+    }
+
+    public MetaObject ReadAMF0()
+    {
+        Enter();
+        MetaObject ReturnValue = new MetaObject();
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: @0x{2:x}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Offset );
 
         int Type = ReadByte();
-        TypeAndData ReturnValue = new TypeAndData();
 
         ReturnValue.Type = Type;
         ReturnValue.Data = null;
+        ReturnValue.Offset = Offset;
 
-        if(_DebugLevel > 2)
-            AddDebugMessage("{0}{1}: Type: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Type);
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0} Type: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Type);
 
         switch (Type)
         {
-            case (int)AMFDataTypes.Number:
-                ReturnValue.TypeStr = "Number";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-
-            case (int)AMFDataTypes.Boolean:
-                ReturnValue.TypeStr = "Boolean";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-
             case (int)AMFDataTypes.String:
                 ReturnValue.TypeStr = "String";
-                ReturnValue.Data = ReadString();
+                ReturnValue.Data = ReadAMF0String();
                 break;
-            
-            case (int)AMFDataTypes.Object:
-                ReturnValue.TypeStr = "Object";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
+
+            case (int)AMFDataTypes.StrictArray:
+                ReturnValue.TypeStr = "StrictArray";
+                ReturnValue.Data = ReadAMF0StrictArray();
                 break;
-            
-            case (int)AMFDataTypes.Null:
-                ReturnValue.TypeStr = "Null";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
-            case (int)AMFDataTypes.Undefined:
-                ReturnValue.TypeStr = "Undefined";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
-            case (int)AMFDataTypes.Reference:
-                ReturnValue.TypeStr = "Reference";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
-            case (int)AMFDataTypes.Array:
-                ReturnValue.TypeStr = "Array";
-                ReturnValue.Data = ReadArray();
-                break;
-            
-            case (int)AMFDataTypes.Date:
-                ReturnValue.TypeStr = "Date";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
-            case (int)AMFDataTypes.LongUTF:
-                ReturnValue.TypeStr = "LongUTF";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
-            case (int)AMFDataTypes.Internal:
-                ReturnValue.TypeStr = "Internal";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
-            case (int)AMFDataTypes.XML:
-                ReturnValue.TypeStr = "XML";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
-            case (int)AMFDataTypes.CustomClass:
-                ReturnValue.TypeStr = "CustomClass";
-                AddDebugMessage( Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + ReturnValue.Name + " TODO: \r\n" );
-                DumpHex(Offset, 20);
-                break;
-            
+
             case (int)AMFDataTypes.AMF3:
                 ReturnValue.TypeStr = "AMF3";
-                ReturnValue.Data =  ReadAMF3Data();
+                ReturnValue.Data = ReadAMF3();
+                break;
+
+            case (int)AMFDataTypes.Number:
+            case (int)AMFDataTypes.Boolean:
+            case (int)AMFDataTypes.Object:
+            case (int)AMFDataTypes.Null:
+            case (int)AMFDataTypes.Undefined:
+            case (int)AMFDataTypes.Reference:
+            case (int)AMFDataTypes.MovieClip:
+            case (int)AMFDataTypes.EcmaArray:
+            case (int)AMFDataTypes.ObjectEnd:
+            case (int)AMFDataTypes.RecordSet:
+            case (int)AMFDataTypes.Date:
+            case (int)AMFDataTypes.LongUTF:
+            case (int)AMFDataTypes.Unsupported:
+            case (int)AMFDataTypes.XMLDocument:
+            case (int)AMFDataTypes.TypedObject:
+            default:
+                //TODO:
+                ReturnValue.TypeStr = "";
+                AddDebugMessage("{0} TODO: Implement AMF0 Type: {2}@{3}\r\n",
+                        Prefix,
+                        System.Reflection.MethodBase.GetCurrentMethod().Name,
+                        ReturnValue.Name,
+                        Offset
+                    );
+
                 break;
 
         }
-        Level--;
+
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: End Offset: 0x{2:x}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Offset);
+
+        Exit();
         return ReturnValue;
     }
 
-    public int GetCurrentOffset()
+    public void WriteAMF0(MetaObject Value)
     {
-        return Offset;
-    }
+        Enter();
+        WriteByte( (byte) Value.Type);
 
-    public string GetDebugStr()
-    {
-        return DebugStr;
+        if (_DebugLevel > 2)
+            AddDebugMessage("{0}{1}: Type: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.Type);
+
+        switch (Value.Type)
+        {
+            case (int)AMFDataTypes.Number:
+                //TODO:
+                Value.TypeStr = "Number";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.Boolean:
+                //TODO:
+                Value.TypeStr = "Boolean";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.String:
+                Value.TypeStr = "String";
+                WriteAMF0String( (string) Value.Data);
+                break;
+
+            case (int)AMFDataTypes.Object:
+                //TODO:
+                Value.TypeStr = "Object";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.Null:
+                //TODO:
+                Value.TypeStr = "Null";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.Undefined:
+                //TODO:
+                Value.TypeStr = "Undefined";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.Reference:
+                //TODO:
+                Value.TypeStr = "Reference";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.StrictArray:
+                Value.TypeStr = "StrictArray";
+                WriteAMF0StrictArray( (ArrayList) Value.Data);
+                break;
+
+            case (int)AMFDataTypes.Date:
+                //TODO:
+                Value.TypeStr = "Date";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.LongUTF:
+                //TODO:
+                Value.TypeStr = "LongUTF";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.Unsupported:
+                //TODO:
+                Value.TypeStr = "Unsupported";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.XMLDocument:
+                //TODO:
+                Value.TypeStr = "XML";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.TypedObject:
+                //TODO:
+                Value.TypeStr = "CustomClass";
+                AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + ": " + Value.Name + " TODO: \r\n");
+                break;
+
+            case (int)AMFDataTypes.AMF3:
+                Value.TypeStr = "AMF3";
+                WriteAMF3( (MetaObject) Value.Data);
+                break;
+
+        }
+
+        Exit();
     }
 }
 
-public class AMFRequestInspector : Inspector2, IRequestInspector2
+public class MyTreeView : TreeView
+{
+    AMFDataParser RelatedAMFDataParser;
+    ElementEdit AMFElementEdit = new ElementEdit();
+
+    public MyTreeView()
+    {
+        MouseDoubleClick += new MouseEventHandler(MyTreeView_MouseDoubleClick);
+
+        AMFElementEdit.StartPosition = FormStartPosition.CenterScreen;
+    }
+
+    public void SetAMFDataParser(AMFDataParser pRelatedAMFDataParser)
+    {
+        RelatedAMFDataParser = pRelatedAMFDataParser;
+    }
+
+    void MyTreeView_MouseDoubleClick(object sender, MouseEventArgs e)
+    {
+        //Warning if only mode
+        if (RelatedAMFDataParser.ReadOnly)
+        {
+            MessageBox.Show(String.Format("You need to check \"Unlock For Editing\" from context menu or by pressing F2 key from the Web Sessions list on the left pane to use this feature."));
+            return;
+        }
+
+        string node_text = RelatedAMFDataParser.GetTreeNodeData(SelectedNode);
+
+        if (node_text != null)
+        {
+            AMFElementEdit.EditText = node_text;
+
+            if (AMFElementEdit.ShowDialog() == DialogResult.OK)
+            {
+                RelatedAMFDataParser.SetTreeNodeData(SelectedNode, AMFElementEdit.EditText);
+            }
+        }
+    }
+}
+
+public class AMFRequestInspector : Inspector2, IRequestInspector2, IBaseInspector2
 {
     HTTPRequestHeaders _headers;
     private byte[] _body;
-    private bool m_bDirty;
-    private bool m_bReadOnly;
-    private TreeControl AMFTreeControl;
-    private TXTEditor oAMFEditor = new TXTEditor();
+
+    private MyTreeView AMFTreeView;
     bool IsAMFContent;
-    AMFDataParser m_AMFData;
+    AMFDataParser m_AMFDataParser;
 
     public AMFRequestInspector()
     {
         IsAMFContent = false;
-        m_AMFData = new AMFDataParser();
+        m_AMFDataParser = new AMFDataParser();
     }
 
     public bool bReadOnly
     {
         get
         {
-            return m_bReadOnly;
+#if DEBUG_MESSAGE_GENERATION
+            MessageBox.Show(String.Format("m_AMFDataParser.ReadOnly:{0}", m_AMFDataParser.ReadOnly));
+#endif
+            return m_AMFDataParser.ReadOnly;
         }
         set
         {
-            m_bReadOnly = value;
+#if DEBUG_MESSAGE_GENERATION
+            MessageBox.Show(String.Format("Set m_AMFDataParser.ReadOnly:{0}", value));
+#endif
+            m_AMFDataParser.ReadOnly = value;
         }
     }
 
@@ -1000,8 +1914,17 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
     {
         get
         {
-            return m_bDirty;
+#if DEBUG_MESSAGE_GENERATION
+            MessageBox.Show(String.Format("m_AMFDataParser.Dirty:{0}", m_AMFDataParser.Dirty));
+#endif
+            return m_AMFDataParser.Dirty;
         }
+    }
+
+    public override bool UnsetDirtyFlag()
+    {
+        m_AMFDataParser.Dirty = false;
+        return false;
     }
 
     public override int GetOrder()
@@ -1012,28 +1935,39 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
     public void Clear()
     {
         IsAMFContent = false;
-        m_bDirty = false;
-        oAMFEditor.Data = null;
+        m_AMFDataParser.Dirty = false;
+        AMFTreeView.Nodes.Clear();
     }
 
     public override void AddToTab(TabPage tabPage)
     {
-        AMFTreeControl = new TreeControl();
+        AMFTreeView = new MyTreeView();
         tabPage.Text = "AMF";
-        tabPage.Controls.Add(AMFTreeControl);
-        AMFTreeControl.Dock = DockStyle.Fill;
+        tabPage.Controls.Add(AMFTreeView);
+        AMFTreeView.Dock = DockStyle.Fill;
 
+        AMFTreeView.SetAMFDataParser(m_AMFDataParser);
+    }
+
+    public override void ShowAboutBox()
+    {
+        MessageBox.Show(string.Format("AMFParser.dll::AMFParser Plugin for Fiddler2 by Jeong Wook (Matt) Oh." ), "About Inspector");
     }
 
     public HTTPRequestHeaders headers
     {
         get
         {
+#if DEBUG_MESSAGE_GENERATION
+            MessageBox.Show(String.Format("Get headers"));
+#endif
             return null;    // Return null if your control doesn't allow header editing.
         }
+
         set
         {
             _headers = value;
+
             if (value.ExistsAndEquals("content-type", "application/x-amf"))
                 IsAMFContent = true;
             else
@@ -1045,11 +1979,27 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
     {
         get
         {
-            return _body;
+            if (!m_AMFDataParser.ReadOnly && m_AMFDataParser.Dirty)
+            {
+#if DEBUG_MESSAGE_GENERATION
+                MessageBox.Show("return _body");
+#endif
+
+                m_AMFDataParser.WriteAMFPacket();
+
+#if DEBUG_MESSAGE_GENERATION
+                MessageBox.Show(String.Format("return _body length of {0}", m_AMFDataParser.DataBytes.Length ));
+#endif
+
+                return m_AMFDataParser.DataBytes;
+            }
+
+            return null;
         }
+
         set
         {
-            AMFTreeControl.treeView.Nodes.Clear();
+            AMFTreeView.Nodes.Clear();
 
             if ((_headers.Exists("Transfer-Encoding") || _headers.Exists("Content-Encoding")))
             {
@@ -1062,18 +2012,14 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2
             {
                 try
                 {
-                    m_AMFData.ProcessData(_body);
+                    m_AMFDataParser.ReadAMFPacket(_body);
 
                     //Drawing
-                    m_AMFData.DrawOnTreeControl(AMFTreeControl);
-                    m_AMFData.DumpHexRemaining();
-                    oAMFEditor.Data += m_AMFData.GetDebugStr();
+                    m_AMFDataParser.DrawOnTreeView(AMFTreeView);                    
                 }
                 catch (Exception e)
                 {
-                    m_AMFData.DumpHexRemaining();
-                    oAMFEditor.Data += m_AMFData.GetDebugStr();
-                    oAMFEditor.Data += "Exception: " + e.StackTrace;
+                    m_AMFDataParser.DumpHexRemaining();
                 }
             }
         }
@@ -1084,16 +2030,14 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
 {
     HTTPResponseHeaders _headers;
     private byte[] _body;
-    private bool m_bDirty;
-    private bool m_bReadOnly;
-    private TreeControl AMFTreeControl;
-    private TXTEditor oAMFEditor = new TXTEditor();
+
+    private MyTreeView AMFTreeView;
     bool IsAMFContent;
-    AMFDataParser m_AMFData;
+    AMFDataParser m_AMFDataParser;
 
     public AMFResponseInspector()
     {
-        m_AMFData = new AMFDataParser();
+        m_AMFDataParser = new AMFDataParser();
         IsAMFContent = false;
     }
 
@@ -1101,11 +2045,11 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
     {
         get
         {
-            return m_bReadOnly;
+            return m_AMFDataParser.ReadOnly;
         }
         set
         {
-            m_bReadOnly = value;
+            m_AMFDataParser.ReadOnly = value;
         }
     }
 
@@ -1113,9 +2057,10 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
     {
         get
         {
-            return m_bDirty;
+            return m_AMFDataParser.Dirty;
         }
     }
+
     public override int GetOrder()
     {
         return 0;
@@ -1124,16 +2069,18 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
     public void Clear()
     {
         IsAMFContent = false;
-        m_bDirty = false;
-        oAMFEditor.Data = null;
+        m_AMFDataParser.Dirty = false;
     }
+
     public override void AddToTab(TabPage tabPage)
     {
-        AMFTreeControl = new TreeControl();
+        AMFTreeView = new MyTreeView();
 
         tabPage.Text = "AMF";
-        tabPage.Controls.Add(AMFTreeControl);
-        AMFTreeControl.Dock = DockStyle.Fill;
+        tabPage.Controls.Add(AMFTreeView);
+        AMFTreeView.Dock = DockStyle.Fill;
+
+        AMFTreeView.SetAMFDataParser(m_AMFDataParser);
     }
 
     public HTTPResponseHeaders headers
@@ -1153,6 +2100,11 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
         }
     }
 
+    public override void ShowAboutBox()
+    {
+        MessageBox.Show(string.Format("AMFParser.dll::AMFParser Plugin for Fiddler2 by Jeong Wook (Matt) Oh."), "About Inspector");
+    }
+
     public byte[] body
     {
         get
@@ -1161,7 +2113,7 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
         }
         set
         {
-            AMFTreeControl.treeView.Nodes.Clear();
+            AMFTreeView.Nodes.Clear();
 
             if ((_headers.Exists("Transfer-Encoding") || _headers.Exists("Content-Encoding")))
             {
@@ -1180,30 +2132,23 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
                 }
             }
 
-            
+
             _body = value;
-            
+
             if (IsAMFContent)
             {
                 try
                 {
-                    m_AMFData.ProcessData(_body);
+                    m_AMFDataParser.ReadAMFPacket(_body);
 
                     //Drawing
-                    //AMFTreeControl.treeView.BeginUpdate();
-                    m_AMFData.DrawOnTreeControl(AMFTreeControl);
-                    //AMFTreeControl.treeView.EndUpdate();
-                    //m_AMFData.DumpHexRemaining();
-                    //oAMFEditor.Data += m_AMFData.GetDebugStr();
+                    m_AMFDataParser.DrawOnTreeView(AMFTreeView);
                 }
                 catch (Exception e)
                 {
-                    m_AMFData.DumpHexRemaining();
-                    oAMFEditor.Data += m_AMFData.GetDebugStr();
-                    oAMFEditor.Data += "Exception: " + e.StackTrace;
+                    m_AMFDataParser.DumpHexRemaining();
                 }
             }
         }
     }
 }
-
