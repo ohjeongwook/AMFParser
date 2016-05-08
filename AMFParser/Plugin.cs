@@ -795,23 +795,20 @@ public class AMFDataParser
     {
         Enter();
 
-        string RetStr = "";
-        int LastOffset = Offset;
+        byte[] rawStr = new byte[Length];
+        Data.CopyTo(Offset, rawStr, 0, Length);
+        string RetStr = Encoding.UTF8.GetString(rawStr);
         Offset += Length;
 
-        for (int i = LastOffset; i < Offset; i++)
-        {
-            RetStr += System.Convert.ToChar(Data[i]).ToString();
-        }
         Exit();
         return RetStr;
     }
 
     public void WriteString(string str)
     {
-        for (int i = 0; i < str.Length; i++)
+        foreach (byte b in Encoding.UTF8.GetBytes(str))
         {
-            Data.Insert(Offset++, BitConverter.GetBytes((char)str[i])[0]);
+            Data.Insert(Offset++, b);
         }
     }
 
@@ -987,7 +984,7 @@ public class AMFDataParser
             }
         }
 
-        WriteAMF3Int( (uint) (str.Length << 1) | 0x1);
+        WriteAMF3Int( (uint) (Encoding.UTF8.GetByteCount(str) << 1) | 0x1);
         WriteString(str);
 
         NewStringRefs.Add(str);
@@ -1666,7 +1663,7 @@ public class AMFDataParser
 
     public void WriteAMF0String(string str)
     {
-        WriteU16(str.Length);
+        WriteU16(Encoding.UTF8.GetByteCount(str));
         WriteString(str);
     }
 
