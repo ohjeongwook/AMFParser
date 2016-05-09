@@ -1406,6 +1406,7 @@ public class AMFDataParser
 
     public MetaObject ReadAMF3()
     {
+        //Flash 9+
         Enter();
         int Type = ReadByte();
 
@@ -1417,29 +1418,33 @@ public class AMFDataParser
         ReturnValue.Data = null;
         ReturnValue.Offset = Offset;
 
-        switch (Type)
+        switch (Type)//marker
         {
-            case 0x00:
+            case 0x00://undefined-marker
                 //undefined
                 ReturnValue.TypeStr = "undefined";
+                //ReturnValue.Data = "undefined";
                 break;
 
-            case 0x01:
+            case 0x01://null-marker
                 //null; 
                 ReturnValue.TypeStr = "null";
+                //ReturnValue.Data = "null";
                 break;
 
-            case 0x02:
+            case 0x02://false-marker
                 //boolean false
                 ReturnValue.TypeStr = "false";
+                //ReturnValue.Data = "false";
                 break;
 
-            case 0x03:
+            case 0x03://true-marker
                 //boolean true
                 ReturnValue.TypeStr = "true";
+                //ReturnValue.Data = "true";
                 break;
 
-            case 0x04:
+            case 0x04://integer-marker
                 //Amf3Int
                 ReturnValue.TypeStr = "Amf3Int";
                 ReturnValue.Data = ReadAMF3Int();
@@ -1447,12 +1452,12 @@ public class AMFDataParser
                     AddDebugMessage("{0} Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.Data);
                 break;
 
-            case 0x05:
+            case 0x05://double-marker
                 ReturnValue.TypeStr = "Double";
                 ReturnValue.Data = ReadDouble();
                 break;
 
-            case 0x06:
+            case 0x06://string-marker
                 //Amf3String
                 ReturnValue.TypeStr = "Amf3String";
                 ReturnValue.Data = ReadAMF3String();
@@ -1460,32 +1465,32 @@ public class AMFDataParser
                     AddDebugMessage("{0} Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, ReturnValue.Data);
                 break;
 
-            case 0x07:
+            case 0x07://xml-doc-marker
                 ReturnValue.TypeStr = "Amf3XmlString";
                 //TODO: Amf3XmlString
                 if (_DebugLevel > 2)
                     AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3String\r\n");
                 break;
 
-            case 0x08:
+            case 0x08://date-marker
                 //Amf3Date
                 ReturnValue.TypeStr = "Amf3Date";
                 ReturnValue.Data = ReadAMF3Date();
                 break;
 
-            case 0x09: //OK
+            case 0x09: //OK//array-marker
                 //Amf3Array
                 ReturnValue.TypeStr = "Amf3Array";
                 ReturnValue.Data = ReadAMF3Array();
                 break;
 
-            case 0x0A:
+            case 0x0A://object-marker
                 //Amf3Object
                 ReturnValue.TypeStr = "Amf3Object";
                 ReturnValue.Data = ReadAMF3Object();
                 break;
 
-            case 0x0B:
+            case 0x0B://xml-marker
                 //TODO: Amf3XmlString
                 ReturnValue.TypeStr = "Amf3XmlString";
 
@@ -1493,12 +1498,22 @@ public class AMFDataParser
                     AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3XmlString\r\n");
                 break;
 
-            case 0x0C:
+            case 0x0C://byte-array-marker
                 //TODO: Amf3ByteArray
                 ReturnValue.TypeStr = "Amf3ByteArray";
 
                 if (_DebugLevel > 2)
                     AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: Amf3ByteArray\r\n");
+                break;
+            default:
+            case 0x0D://vector-int-marker, Flash 10+
+            case 0x0E://vector-uint-marker, Flash 10+
+            case 0x0F://vector-double-marker, Flash 10+
+            case 0x10://vector-object-marker, Flash 10+
+            case 0x11://dictionary-marker, Flash 10+
+
+                if (_DebugLevel > 2)
+                    AddDebugMessage(Prefix + System.Reflection.MethodBase.GetCurrentMethod().Name + " TODO: " + Type + "\r\n");
                 break;
         }
 
@@ -1672,6 +1687,7 @@ public class AMFDataParser
 
     public MetaObject ReadAMF0()
     {
+        //Flash 6+
         Enter();
         MetaObject ReturnValue = new MetaObject();
 
@@ -1700,6 +1716,7 @@ public class AMFDataParser
                 break;
 
             case (int)AMFDataTypes.AMF3:
+                //Flash 9+
                 ReturnValue.TypeStr = "AMF3";
                 ReturnValue.Data = ReadAMF3();
                 break;
@@ -1722,10 +1739,12 @@ public class AMFDataParser
             default:
                 //TODO:
                 ReturnValue.TypeStr = "";
-                AddDebugMessage("{0} TODO: Implement AMF0 Type: {2}@{3}\r\n",
+                AddDebugMessage("{0} TODO: Implement AMF0 Type: {2}:{3}({4})@{5}\r\n",
                         Prefix,
                         System.Reflection.MethodBase.GetCurrentMethod().Name,
                         ReturnValue.Name,
+                        ((AMFDataTypes)Type).ToString(),
+                        Type.ToString(),
                         Offset
                     );
 
