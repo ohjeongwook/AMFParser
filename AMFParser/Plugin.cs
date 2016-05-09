@@ -815,7 +815,7 @@ public class AMFDataParser
         }
     }
 
-    public uint ReadAMF3Int()
+    public uint ReadAMF3UInt()
     {
         Enter();
 
@@ -851,8 +851,6 @@ public class AMFDataParser
                     NewByte = (uint)ReadByte();
 
                     Byte |= NewByte;
-                    if ((Byte & 0x10000000) != 0)
-                        Byte |= 0xe0000000;
                     Exit();
                     return Byte;
                 }
@@ -861,8 +859,22 @@ public class AMFDataParser
         }
     }
 
-    public void WriteAMF3Int(uint value)
+    public int ReadAMF3Int()
     {
+        uint Data = ReadAMF3UInt();
+        bool neg = (Data & 0x20000000) != 0;
+        int Val = (int)Data & 0x1FFFFFFF;
+        if (neg)
+            Val = -Val;
+
+        return Val;
+    }
+
+    public void WriteAMF3UInt(uint value)
+    {
+        if (value > 0x3FFFFFFF)
+            throw new ArgumentOutOfRangeException("value");
+
         Enter();
 
         if (value < 128)
@@ -874,7 +886,7 @@ public class AMFDataParser
         }
         else
         {
-            byte[] tmp_bytes = new byte[5];
+            byte[] tmp_bytes = new byte[4];
 
             uint tmp_value = value;
             int index = 0;
@@ -897,6 +909,19 @@ public class AMFDataParser
         Exit();
     }
 
+    public void WriteAMF3Int(int value)
+    {
+        //TODO: if out of range, use double
+        if (value >= 0x10000000 || value < -0x10000000)
+            throw new ArgumentOutOfRangeException("value");
+
+        uint value2 = (uint)value & 0x1FFFFFFF;
+        if (value < 0)
+            value2 = (uint)value | 0x20000000;
+
+        WriteAMF3UInt(value2);
+    }
+
     public string ReadAMF3String()
     {
         Enter();
@@ -904,7 +929,7 @@ public class AMFDataParser
         if (_DebugLevel > 4)
             AddDebugMessage("{0}{1}: @0x{2:x}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Offset );
 
-        uint StrRef = ReadAMF3Int();
+        uint StrRef = ReadAMF3UInt();
         string Str = "";
 
         if (_DebugLevel > 4)
@@ -989,7 +1014,7 @@ public class AMFDataParser
                                 index << 1
                             );
 
-                    WriteAMF3Int((uint)(index << 1));
+                    WriteAMF3UInt((uint)(index << 1));
                     Exit();
                     return;
                 }
@@ -997,7 +1022,7 @@ public class AMFDataParser
             NewStringRefs.Add(str);
         }
 
-        WriteAMF3Int( (uint) (Encoding.UTF8.GetByteCount(str) << 1) | 0x1);
+        WriteAMF3UInt( (uint) (Encoding.UTF8.GetByteCount(str) << 1) | 0x1);
         WriteString(str);
 
 
@@ -1016,7 +1041,7 @@ public class AMFDataParser
                 System.Reflection.MethodBase.GetCurrentMethod().Name, 
                 Offset);
 
-        uint ReferencePtr = ReadAMF3Int();
+        uint ReferencePtr = ReadAMF3UInt();
 
         if (_DebugLevel > 2)
             AddDebugMessage("{0} ReferencePtr: 0x{2:x}\r\n",
@@ -1189,7 +1214,7 @@ public class AMFDataParser
                 ReferencePtr |= Value.IsDynamic << 3;
                 ReferencePtr |= Value.ClassMemberCount << 4;
 
-                WriteAMF3Int( (uint) ReferencePtr);
+                WriteAMF3UInt( (uint) ReferencePtr);
                 WriteAMF3String( (string) Value.TypeIdentifier);
 
                 for (int i = 0; i < Value.ClassMemberCount; i++)
@@ -1230,12 +1255,12 @@ public class AMFDataParser
                     }
                 }
 
-                WriteAMF3Int((uint)ReferencePtr);
+                WriteAMF3UInt((uint)ReferencePtr);
             }
         }
         else
         {
-            WriteAMF3Int((uint)ReferencePtr);
+            WriteAMF3UInt((uint)ReferencePtr);
         }
 
         if (Value.IsExternalizable == 1)
@@ -1308,7 +1333,7 @@ public class AMFDataParser
     {
         Enter();
 
-        uint ReferencePtr = ReadAMF3Int();
+        uint ReferencePtr = ReadAMF3UInt();
         Dictionary<string, object> KeyValues = new Dictionary<string, object>();
         ArrayList DataList = new ArrayList();
 
@@ -1357,7 +1382,7 @@ public class AMFDataParser
         if (_DebugLevel > 2)
             AddDebugMessage("{0}{1}: \r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name);
 
-        WriteAMF3Int((uint)((DataList.Count << 1) | 1));
+        WriteAMF3UInt((uint)((DataList.Count << 1) | 1));
 
         foreach (KeyValuePair<string, Object> kvp in KeyValues)
         {
@@ -1378,7 +1403,7 @@ public class AMFDataParser
     {
         Enter();
 
-        uint ReferencePtr = ReadAMF3Int();
+        uint ReferencePtr = ReadAMF3UInt();
         bool InLine = (ReferencePtr & 0x1) == 0x1;
         ReferencePtr >>= 1;
 
@@ -1567,7 +1592,7 @@ public class AMFDataParser
                 if (_DebugLevel > 2)
                     AddDebugMessage("{0} Value: {2:G}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, Value.Data);
 
-                WriteAMF3Int( (uint) Value.Data);
+                WriteAMF3Int( (int) Value.Data);
                 break;
 
             case 0x05:

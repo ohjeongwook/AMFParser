@@ -117,7 +117,7 @@ namespace TestAMFDataParser
                 0x57
             };
             target.DataBytes = original_bytes;
-            uint ret = target.ReadAMF3Int();
+            int ret = target.ReadAMF3Int();
 
             Assert.IsTrue( ret == 0x57 );
 
