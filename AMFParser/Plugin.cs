@@ -921,17 +921,26 @@ public class AMFDataParser
             uint StrLen = StrRef >> 1;
 
             Str = ReadString((int)StrLen);
-            if (_DebugLevel > 4)
-                AddDebugMessage("{0} Str: [{2}] Refs Table Index: 0x{3:x}\r\n", 
-                        Prefix, 
-                        System.Reflection.MethodBase.GetCurrentMethod().Name, 
-                        Str, 
-                        StringRefs.Count 
-                    );
 
-            if (Str != null && StringRefs != null)
+            if (!String.IsNullOrEmpty(Str) && StringRefs != null)
             {
+                if (_DebugLevel > 4)
+                    AddDebugMessage("{0} Str: [{2}] Refs Table Index: 0x{3:x}\r\n",
+                        Prefix,
+                        System.Reflection.MethodBase.GetCurrentMethod().Name,
+                        Str,
+                        StringRefs.Count
+                    );
                 StringRefs.Add(Str);
+            }
+            else
+            {
+                if (_DebugLevel > 4)
+                    AddDebugMessage("{0} Str: [{2}]\r\n",
+                        Prefix,
+                        System.Reflection.MethodBase.GetCurrentMethod().Name,
+                        Str
+                    );
             }
         }
         else
@@ -966,7 +975,7 @@ public class AMFDataParser
 
         if (str != "")
         {
-            for (int index = 1; index < NewStringRefs.Count; index++)
+            for (int index = 0; index < NewStringRefs.Count; index++)
             {
                 if (str == (string)NewStringRefs[index])
                 {
@@ -985,12 +994,12 @@ public class AMFDataParser
                     return;
                 }
             }
+            NewStringRefs.Add(str);
         }
 
         WriteAMF3Int( (uint) (Encoding.UTF8.GetByteCount(str) << 1) | 0x1);
         WriteString(str);
 
-        NewStringRefs.Add(str);
 
         Exit();
     }
