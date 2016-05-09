@@ -213,7 +213,10 @@ public class AMFDataParser
     public void AddDebugMessage(string format, params Object[] args)
     {
 #if DEBUG
-        DebugStr += String.Format(format, args);
+        if (args != null && args.Length > 0)
+            DebugStr += String.Format(format, args);
+        else
+            DebugStr += format;
 #endif
     }
 
@@ -711,12 +714,12 @@ public class AMFDataParser
             AsciiStr += AsciiCh;
             if (i % 16 == 15)
             {
-                AddDebugMessage("   " + AsciiStr + "\r\n" + Prefix);
+                AddDebugMessage("   {0}\r\n" + Prefix, AsciiStr);
                 AsciiStr = "";
             }
         }
 
-        AddDebugMessage("   " + AsciiStr + "\r\n" + Prefix);
+        AddDebugMessage("   {0}\r\n" + Prefix, AsciiStr);
         AddDebugMessage("\r\n");
     }
 
