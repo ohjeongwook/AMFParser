@@ -592,9 +592,9 @@ namespace TestAMFDataParser
 
             Debug.WriteLine(target.GetDebugMessage());
 
-            original_bytes[0x248] = 0x1; //Adjustment
-            original_bytes[0x260] = 0x1; //Adjustment
-            original_bytes[0x278] = 0x1; //Adjustment
+            //original_bytes[0x248] = 0x1; //Adjustment
+            //original_bytes[0x260] = 0x1; //Adjustment
+            //original_bytes[0x278] = 0x1; //Adjustment
             AssertBytes(target.DataBytes, original_bytes);
         }
 
@@ -806,9 +806,9 @@ namespace TestAMFDataParser
             DumpHex(original_bytes);
             DumpHex(target.DataBytes);
 
-            original_bytes[0x4 + 0x248] = 0x1; //Adjustment
-            original_bytes[0x4 + 0x260] = 0x1; //Adjustment
-            original_bytes[0x4 + 0x278] = 0x1; //Adjustment
+            //original_bytes[0x4 + 0x248] = 0x1; //Adjustment
+            //original_bytes[0x4 + 0x260] = 0x1; //Adjustment
+            //original_bytes[0x4 + 0x278] = 0x1; //Adjustment
             AssertBytes(target.DataBytes, original_bytes);
 
             Debug.WriteLine(target.GetDebugMessage());
