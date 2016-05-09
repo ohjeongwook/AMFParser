@@ -1246,7 +1246,7 @@ public class AMFDataParser
 
                     if (Value.TypeIdentifier == OneClassDefinition.TypeIdentifier)
                     {
-                        ReferencePtr |= (uint)(index << 1);
+                        ReferencePtr |= (uint)(index << 2);
 
                         if (_DebugLevel > 2)
                             AddDebugMessage("{0} Found Index: 0x{2:x} ReferencePtr: 0x{3:x}\r\n", Prefix, System.Reflection.MethodBase.GetCurrentMethod().Name, index, ReferencePtr);
