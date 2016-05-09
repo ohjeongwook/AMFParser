@@ -55,7 +55,7 @@
   <ItemGroup>
     <Reference Include="fiddler, Version=2.2.5.0, Culture=neutral, processorArchitecture=x86">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\..\..\..\..\..\Program Files (x86)\Fiddler2\Fiddler.exe</HintPath>
+      <HintPath>C:\Program Files (x86)\Fiddler2\Fiddler.exe</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core">
@@ -79,9 +79,7 @@
     <Compile Include="ElementEdit.Designer.cs">
       <DependentUpon>ElementEdit.cs</DependentUpon>
     </Compile>
-    <Compile Include="Plugin.cs">
-      <SubType>Component</SubType>
-    </Compile>
+    <Compile Include="Plugin.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>

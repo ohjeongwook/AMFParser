@@ -117,7 +117,7 @@ namespace TestAMFDataParser
                 0x57
             };
             target.DataBytes = original_bytes;
-            uint ret = target.ReadAMF3Int();
+            int ret = target.ReadAMF3Int();
 
             Assert.IsTrue( ret == 0x57 );
 
@@ -209,6 +209,40 @@ namespace TestAMFDataParser
         }
 
         [TestMethod()]
+        public void TestAMF0UTF8String()
+        {
+            AMFDataParser target = new AMFDataParser(); // TODO: Initialize to an appropriate value
+            /* T:\mat\Research\Technology\AMF\Samples\farm-tr-fb.socialgamenet.com-20-request.bin (2/21/2012 1:35:38 PM)
+              StartOffset: 00000028, EndOffset: 00000037, Length: 00000010 */
+
+            byte[] original_bytes = {
+                0x00, 0x21,
+                0xC2, 0xA9, 0xE4, 0xB8, 0xAD, 0xE3, 0x82, 0xAC,
+                0xE3, 0x81, 0x82, 0xCE, 0xB8, 0xE3, 0x89, 0xA0,
+                0xE3, 0x84, 0xB1, 0xCE, 0xB1, 0xCE, 0xBD, 0xD0,
+                0xB0, 0xD0, 0xBB, 0xD1, 0x87, 0xF0, 0x9F, 0x98,
+                0x83
+            };
+            string original = "©中ガあθ㉠ㄱανалч😃";
+
+            target.DataBytes = original_bytes;
+            string parsed = target.ReadAMF0String();
+
+            Assert.IsTrue(parsed == original);
+
+            byte[] pmNullData = {
+            };
+
+            target.DataBytes = pmNullData;
+
+            target.WriteAMF0String(original);
+
+            Debug.WriteLine(String.Format("target.DataBytes.Length: 0x{0:X}\r\n", target.DataBytes.Length));
+            DumpHex(target.DataBytes);
+            AssertBytes(target.DataBytes, original_bytes);
+        }
+
+        [TestMethod()]
         public void TestAMF3String()
         {
             AMFDataParser target = new AMFDataParser(); // TODO: Initialize to an appropriate value
@@ -235,6 +269,66 @@ namespace TestAMFDataParser
             target.WriteAMF3String(original);
 
             Debug.WriteLine(String.Format("target.DataBytes.Length: 0x{0:X}\r\n", target.DataBytes.Length ));
+            DumpHex(target.DataBytes);
+
+            AssertBytes(target.DataBytes, original_bytes);
+        }
+
+        [TestMethod()]
+        public void TestAMF3StringRefs()
+        {
+            AMFDataParser target = new AMFDataParser();
+            target.DataBytes = new byte[0];
+            target.WriteAMF3String("");
+            target.WriteAMF3String("1111");
+            target.WriteAMF3String("");
+            target.WriteAMF3String("1111");
+
+            AMFDataParser target2 = new AMFDataParser();
+            target2.DataBytes = target.DataBytes;
+            Assert.AreEqual("", target2.ReadAMF3String());
+            Assert.AreEqual("1111", target2.ReadAMF3String());
+            Assert.AreEqual("", target2.ReadAMF3String());
+            Assert.AreEqual("1111", target2.ReadAMF3String());
+
+            byte[] original_bytes = {
+                0x1,
+                0x9, 0x31, 0x31, 0x31, 0x31,
+                0x1,
+                0x0,
+            };
+            AssertBytes(original_bytes, target.DataBytes);
+        }
+
+        [TestMethod()]
+        public void TestAMF3UTF8String()
+        {
+            AMFDataParser target = new AMFDataParser(); // TODO: Initialize to an appropriate value
+            /* T:\mat\Research\Technology\AMF\Samples\farm-tr-fb.socialgamenet.com-22-request.bin (2/21/2012 1:09:42 PM)
+               StartOffset: 000000B1, EndOffset: 000000DC, Length: 0000002C */
+            byte[] original_bytes = {
+                0x43,
+                0xC2, 0xA9, 0xE4, 0xB8, 0xAD, 0xE3, 0x82, 0xAC,
+                0xE3, 0x81, 0x82, 0xCE, 0xB8, 0xE3, 0x89, 0xA0,
+                0xE3, 0x84, 0xB1, 0xCE, 0xB1, 0xCE, 0xBD, 0xD0,
+                0xB0, 0xD0, 0xBB, 0xD1, 0x87, 0xF0, 0x9F, 0x98,
+                0x83
+            };
+
+            string original = "©中ガあθ㉠ㄱανалч😃";
+
+            target.DataBytes = original_bytes;
+            string parsed = target.ReadAMF3String();
+
+            Assert.IsTrue(parsed == original);
+
+            byte[] pmNullData = {
+            };
+
+            target.DataBytes = pmNullData;
+            target.WriteAMF3String(original);
+
+            Debug.WriteLine(String.Format("target.DataBytes.Length: 0x{0:X}\r\n", target.DataBytes.Length));
             DumpHex(target.DataBytes);
 
             AssertBytes(target.DataBytes, original_bytes);
@@ -498,9 +592,9 @@ namespace TestAMFDataParser
 
             Debug.WriteLine(target.GetDebugMessage());
 
-            original_bytes[0x248] = 0x1; //Adjustment
-            original_bytes[0x260] = 0x1; //Adjustment
-            original_bytes[0x278] = 0x1; //Adjustment
+            //original_bytes[0x248] = 0x1; //Adjustment
+            //original_bytes[0x260] = 0x1; //Adjustment
+            //original_bytes[0x278] = 0x1; //Adjustment
             AssertBytes(target.DataBytes, original_bytes);
         }
 
@@ -712,9 +806,9 @@ namespace TestAMFDataParser
             DumpHex(original_bytes);
             DumpHex(target.DataBytes);
 
-            original_bytes[0x4 + 0x248] = 0x1; //Adjustment
-            original_bytes[0x4 + 0x260] = 0x1; //Adjustment
-            original_bytes[0x4 + 0x278] = 0x1; //Adjustment
+            //original_bytes[0x4 + 0x248] = 0x1; //Adjustment
+            //original_bytes[0x4 + 0x260] = 0x1; //Adjustment
+            //original_bytes[0x4 + 0x278] = 0x1; //Adjustment
             AssertBytes(target.DataBytes, original_bytes);
 
             Debug.WriteLine(target.GetDebugMessage());
