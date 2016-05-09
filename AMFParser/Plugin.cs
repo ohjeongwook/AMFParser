@@ -2077,6 +2077,14 @@ public class AMFRequestInspector : Inspector2, IRequestInspector2, IBaseInspecto
             }
         }
     }
+
+    public override int ScoreForContentType(string sMIMEType)
+    {
+        if (sMIMEType.OICEquals("application/x-amf"))
+            return 1;
+        else
+            return 0;
+    }
 }
 
 public class AMFResponseInspector : Inspector2, IResponseInspector2
@@ -2203,5 +2211,13 @@ public class AMFResponseInspector : Inspector2, IResponseInspector2
                 }
             }
         }
+    }
+
+    public override int ScoreForContentType(string sMIMEType)
+    {
+        if (sMIMEType.OICEquals("application/x-amf"))
+            return 1;
+        else
+            return 0;
     }
 }
