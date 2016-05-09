@@ -886,7 +886,8 @@ public class AMFDataParser
         }
         else
         {
-            byte[] tmp_bytes = new byte[4];
+            //TODO: max 4 bytes, and if 4 bytes, the first one don't need `& 0x7f`
+            byte[] tmp_bytes = new byte[5];
 
             uint tmp_value = value;
             int index = 0;
