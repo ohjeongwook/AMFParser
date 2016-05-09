@@ -275,6 +275,32 @@ namespace TestAMFDataParser
         }
 
         [TestMethod()]
+        public void TestAMF3StringRefs()
+        {
+            AMFDataParser target = new AMFDataParser();
+            target.DataBytes = new byte[0];
+            target.WriteAMF3String("");
+            target.WriteAMF3String("1111");
+            target.WriteAMF3String("");
+            target.WriteAMF3String("1111");
+
+            AMFDataParser target2 = new AMFDataParser();
+            target2.DataBytes = target.DataBytes;
+            Assert.AreEqual("", target2.ReadAMF3String());
+            Assert.AreEqual("1111", target2.ReadAMF3String());
+            Assert.AreEqual("", target2.ReadAMF3String());
+            Assert.AreEqual("1111", target2.ReadAMF3String());
+
+            byte[] original_bytes = {
+                0x1,
+                0x9, 0x31, 0x31, 0x31, 0x31,
+                0x1,
+                0x0,
+            };
+            AssertBytes(original_bytes, target.DataBytes);
+        }
+
+        [TestMethod()]
         public void TestAMF3UTF8String()
         {
             AMFDataParser target = new AMFDataParser(); // TODO: Initialize to an appropriate value
